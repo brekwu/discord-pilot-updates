@@ -8,7 +8,7 @@ const actionNames = { create_category: "Créer une catégorie", create_text_chan
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-const voice = { stream: null, context: null, source: null, processor: null, chunks: [], timer: null, busy: false };
+const voice = { stream: null, recorder: null, chunks: [], timer: null, clock: null, startedAt: 0, previewUrl: null, busy: false };
 
 function dom(tag, className, value) { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = String(value); return node; }
 function replace(node, children) { node.replaceChildren(...children); }
@@ -51,65 +51,37 @@ function voiceStatus(message) {
   el.textContent = message;
 }
 
-function voiceWav(chunks, sourceRate) {
-  // Send a portable 16-bit, mono 16 kHz WAV. The local server needs no FFmpeg.
-  if (!Number.isFinite(sourceRate) || sourceRate < 8000 || sourceRate > 192000) throw new Error("Fréquence audio incompatible.");
-  const count = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  if (!count) throw new Error("Le microphone n'a enregistré aucun son.");
-  const samples = new Float32Array(count);
-  for (let offset = 0, i = 0; i < chunks.length; i++) { samples.set(chunks[i], offset); offset += chunks[i].length; }
-  const rate = 16000;
-  const scale = sourceRate / rate;
-  const length = Math.floor(count / scale);
-  const buffer = new ArrayBuffer(44 + length * 2);
-  const view = new DataView(buffer);
-  const ascii = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
-  ascii(0, "RIFF"); view.setUint32(4, 36 + length * 2, true); ascii(8, "WAVE");
-  ascii(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true); view.setUint32(24, rate, true);
-  view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  ascii(36, "data"); view.setUint32(40, length * 2, true);
-  for (let i = 0; i < length; i++) {
-    const begin = i * scale;
-    const end = Math.min(count, (i + 1) * scale);
-    let sum = 0, weight = 0;
-    for (let j = Math.floor(begin); j < Math.ceil(end); j++) {
-      const share = Math.min(j + 1, end) - Math.max(j, begin);
-      if (share > 0) { sum += samples[j] * share; weight += share; }
-    }
-    const normalized = Math.max(-1, Math.min(1, sum / (weight || 1)));
-    view.setInt16(44 + i * 2, normalized < 0 ? normalized * 32768 : normalized * 32767, true);
-  }
-  return new Blob([buffer], {type: "audio/wav"});
+function buildVoiceBlob(chunks, mimeType) {
+  // MediaRecorder retains compressed microphone frames even when JS events
+  // are throttled in a background Opera tab; we assemble *all* chunks on stop.
+  const blob = new Blob(chunks.filter(chunk => chunk.size > 0), {type: mimeType});
+  if (blob.size < 1000) throw new Error("Enregistrement vide ou coupé. Réessaie et vérifie le microphone choisi dans Opera.");
+  return blob;
 }
 
 async function beginVoiceRecording() {
-  if (!navigator.mediaDevices?.getUserMedia || !(window.AudioContext || window.webkitAudioContext)) {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     throw new Error("Microphone non disponible dans ce navigateur. Vérifie les autorisations d'Opera.");
   }
   const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
-  let context;
   try {
-    const AudioEngine = window.AudioContext || window.webkitAudioContext;
-    context = new AudioEngine();
-    await context.resume();
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(4096, 1, 1);
+    const formats = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+    const mimeType = formats.find(type => window.MediaRecorder.isTypeSupported?.(type));
+    const recorder = new window.MediaRecorder(stream, mimeType ? {mimeType, audioBitsPerSecond: 96000} : {audioBitsPerSecond: 96000});
     voice.chunks = [];
-    processor.onaudioprocess = event => {
-      // Capture independent of keyboard focus, including when other windows are in front.
-      voice.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-    };
-    source.connect(processor);
-    processor.connect(context.destination);
-    voice.stream = stream; voice.context = context; voice.source = source; voice.processor = processor;
-    voice.timer = setTimeout(() => finishVoiceRecording(), 90000);
+    recorder.ondataavailable = event => {if (event.data?.size) voice.chunks.push(event.data);};
+    recorder.start(1000); // The stop event flushes all remaining data, not just the first second.
+    voice.stream = stream; voice.recorder = recorder; voice.startedAt = Date.now();
+    voice.timer = setTimeout(() => finishVoiceRecording(), 300000);
+    voice.clock = setInterval(() => {
+      const seconds = Math.floor((Date.now() - voice.startedAt) / 1000);
+      voiceStatus(`● Micro actif · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} · 5 minutes maximum. Tu peux utiliser une autre fenêtre.`);
+    }, 1000);
     $("voiceButton").classList.add("recording");
     $("voiceButton").textContent = "■ Arrêter";
-    voiceStatus("● Enregistrement en cours. Tu peux travailler dans une autre fenêtre. Clique sur Arrêter pour transcrire (90 secondes maximum).");
+    voiceStatus("● Enregistrement démarré. Parle normalement, même dans une autre fenêtre. Clique sur Arrêter pour transcrire (5 minutes maximum).");
   } catch (error) {
     stream.getTracks().forEach(track => track.stop());
-    if (context) await context.close();
     throw error;
   }
 }
@@ -118,31 +90,48 @@ async function finishVoiceRecording() {
   if (!voice.stream || voice.busy) return;
   voice.busy = true;
   const button = $("voiceButton"); button.disabled = true;
-  clearTimeout(voice.timer);
-  const chunks = voice.chunks, sourceRate = voice.context.sampleRate;
+  clearTimeout(voice.timer); clearInterval(voice.clock);
+  const recorder = voice.recorder;
+  const stream = voice.stream;
+  const elapsed = (Date.now() - voice.startedAt) / 1000;
+  let audio = null;
+  let captureError = null;
   try {
-    voice.processor.onaudioprocess = null;
-    voice.source.disconnect(); voice.processor.disconnect();
-    voice.stream.getTracks().forEach(track => track.stop());
-    await voice.context.close();
+    if (recorder.state !== "inactive") {
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          recorder.addEventListener("stop", resolve, {once: true});
+          recorder.addEventListener("error", () => reject(new Error("L'enregistreur a été interrompu.")), {once: true});
+          recorder.stop();
+        }),
+        delay(15000).then(() => {throw new Error("Le navigateur n'a pas terminé l'enregistrement.");}),
+      ]);
+    }
+    audio = buildVoiceBlob(voice.chunks, recorder.mimeType || "audio/webm");
   } catch (error) {
-    // A browser may interrupt AudioContext while stopping microphone capture.
-    console.warn("Arrêt audio :", error);
+    captureError = error;
   } finally {
-    voice.stream = null; voice.context = null; voice.source = null; voice.processor = null; voice.chunks = [];
+    stream.getTracks().forEach(track => track.stop());
+    voice.stream = null; voice.recorder = null; voice.chunks = [];
     button.classList.remove("recording"); button.textContent = "🎙 Dicter";
   }
   try {
-    const wav = voiceWav(chunks, sourceRate);
-    if (wav.size < 16044) throw new Error("Parle au moins une demi-seconde avant d'arrêter.");
-    voiceStatus("Transcription française en cours avec Whisper… Le premier usage télécharge automatiquement un modèle plus précis (environ 150 Mo). Cela peut prendre quelques minutes.");
-    const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": "audio/wav"}, body: wav});
+    if (captureError) throw captureError;
+    if (voice.previewUrl) URL.revokeObjectURL(voice.previewUrl);
+    voice.previewUrl = URL.createObjectURL(audio);
+    const preview = $("voicePreview"); preview.src = voice.previewUrl; preview.hidden = false;
+    voiceStatus(`Enregistrement reçu : ${elapsed.toFixed(0)} s, ${Math.ceil(audio.size / 1024)} Ko. Transcription Whisper Small en cours… Au premier usage, téléchargement automatique d'environ 500 Mo.`);
+    const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": audio.type}, body: audio});
     if (!result.text?.trim()) throw new Error("Aucune parole détectée. Essaie de parler plus près du micro.");
     const input = $("requestText");
     const joined = [input.value.trim(), result.text.trim()].filter(Boolean).join(" ");
     input.value = joined.slice(0, input.maxLength);
     input.dispatchEvent(new Event("input", {bubbles: true}));
-    voiceStatus("✓ Dictée retranscrite. Vérifie le texte puis clique sur Préparer le plan.");
+    if (elapsed > 10 && result.seconds < elapsed * 0.65) {
+      voiceStatus(`⚠ Dictée partielle : le fichier ne contient que ${result.seconds} s sur ${elapsed.toFixed(0)} s enregistrées. Réécoute l'audio ci-dessous pour vérifier ton microphone.`);
+    } else {
+      voiceStatus(`✓ ${result.seconds} s d'audio analysées, ${result.segments} passage(s) reconnus. Tu peux réécouter le vocal puis préparer le plan.`);
+    }
   } catch (error) {
     voiceStatus("Transcription interrompue : " + error.message);
     toast(error.message, true);
