@@ -57,7 +57,7 @@ jobs:
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
-            if (-not $ready) { throw 'Le serveur local n’a pas démarré en 120 secondes.' }
+            if (-not $ready) { throw 'Le serveur local ne demarre pas en 120 secondes.' }
             $page = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/' -TimeoutSec 10
             $asset = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/assets/app.js' -TimeoutSec 10
             if ($page.StatusCode -ne 200 -or $asset.StatusCode -ne 200) { throw 'Interface locale incomplète.' }
