@@ -135,7 +135,7 @@ async function finishVoiceRecording() {
   try {
     const wav = voiceWav(chunks, sourceRate);
     if (wav.size < 16044) throw new Error("Parle au moins une demi-seconde avant d'arrêter.");
-    voiceStatus("Transcription française en cours… Au premier usage, le modèle vocal local est récupéré automatiquement (environ 41 Mo).");
+    voiceStatus("Transcription française en cours avec Whisper… Le premier usage télécharge automatiquement un modèle plus précis (environ 150 Mo). Cela peut prendre quelques minutes.");
     const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": "audio/wav"}, body: wav});
     if (!result.text?.trim()) throw new Error("Aucune parole détectée. Essaie de parler plus près du micro.");
     const input = $("requestText");
