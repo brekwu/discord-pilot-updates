@@ -8,6 +8,7 @@ const actionNames = { create_category: "Créer une catégorie", create_text_chan
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const voice = { stream: null, context: null, source: null, processor: null, chunks: [], timer: null, busy: false };
 
 function dom(tag, className, value) { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = String(value); return node; }
 function replace(node, children) { node.replaceChildren(...children); }
@@ -43,6 +44,119 @@ async function waitForDiscordConnection(timeoutMs = 20000) {
 
 let toastTimer;
 function toast(text, error = false) { const box = $("toast"); box.textContent = text; box.className = `toast${error ? " error" : ""}`; box.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => box.hidden = true, 5700); }
+
+function voiceStatus(message) {
+  const el = $("voiceStatus");
+  el.hidden = false;
+  el.textContent = message;
+}
+
+function voiceWav(chunks, sourceRate) {
+  // Send a portable 16-bit, mono 16 kHz WAV. The local server needs no FFmpeg.
+  if (!Number.isFinite(sourceRate) || sourceRate < 8000 || sourceRate > 192000) throw new Error("Fréquence audio incompatible.");
+  const count = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (!count) throw new Error("Le microphone n'a enregistré aucun son.");
+  const samples = new Float32Array(count);
+  for (let offset = 0, i = 0; i < chunks.length; i++) { samples.set(chunks[i], offset); offset += chunks[i].length; }
+  const rate = 16000;
+  const scale = sourceRate / rate;
+  const length = Math.floor(count / scale);
+  const buffer = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(buffer);
+  const ascii = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+  ascii(0, "RIFF"); view.setUint32(4, 36 + length * 2, true); ascii(8, "WAVE");
+  ascii(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, "data"); view.setUint32(40, length * 2, true);
+  for (let i = 0; i < length; i++) {
+    const begin = i * scale;
+    const end = Math.min(count, (i + 1) * scale);
+    let sum = 0, weight = 0;
+    for (let j = Math.floor(begin); j < Math.ceil(end); j++) {
+      const share = Math.min(j + 1, end) - Math.max(j, begin);
+      if (share > 0) { sum += samples[j] * share; weight += share; }
+    }
+    const normalized = Math.max(-1, Math.min(1, sum / (weight || 1)));
+    view.setInt16(44 + i * 2, normalized < 0 ? normalized * 32768 : normalized * 32767, true);
+  }
+  return new Blob([buffer], {type: "audio/wav"});
+}
+
+async function beginVoiceRecording() {
+  if (!navigator.mediaDevices?.getUserMedia || !(window.AudioContext || window.webkitAudioContext)) {
+    throw new Error("Microphone non disponible dans ce navigateur. Vérifie les autorisations d'Opera.");
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+  let context;
+  try {
+    const AudioEngine = window.AudioContext || window.webkitAudioContext;
+    context = new AudioEngine();
+    await context.resume();
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(4096, 1, 1);
+    voice.chunks = [];
+    processor.onaudioprocess = event => {
+      // Capture independent of keyboard focus, including when other windows are in front.
+      voice.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+    source.connect(processor);
+    processor.connect(context.destination);
+    voice.stream = stream; voice.context = context; voice.source = source; voice.processor = processor;
+    voice.timer = setTimeout(() => finishVoiceRecording(), 90000);
+    $("voiceButton").classList.add("recording");
+    $("voiceButton").textContent = "■ Arrêter";
+    voiceStatus("● Enregistrement en cours. Tu peux travailler dans une autre fenêtre. Clique sur Arrêter pour transcrire (90 secondes maximum).");
+  } catch (error) {
+    stream.getTracks().forEach(track => track.stop());
+    if (context) await context.close();
+    throw error;
+  }
+}
+
+async function finishVoiceRecording() {
+  if (!voice.stream || voice.busy) return;
+  voice.busy = true;
+  const button = $("voiceButton"); button.disabled = true;
+  clearTimeout(voice.timer);
+  const chunks = voice.chunks, sourceRate = voice.context.sampleRate;
+  try {
+    voice.processor.onaudioprocess = null;
+    voice.source.disconnect(); voice.processor.disconnect();
+    voice.stream.getTracks().forEach(track => track.stop());
+    await voice.context.close();
+  } catch (error) {
+    // A browser may interrupt AudioContext while stopping microphone capture.
+    console.warn("Arrêt audio :", error);
+  } finally {
+    voice.stream = null; voice.context = null; voice.source = null; voice.processor = null; voice.chunks = [];
+    button.classList.remove("recording"); button.textContent = "🎙 Dicter";
+  }
+  try {
+    const wav = voiceWav(chunks, sourceRate);
+    if (wav.size < 16044) throw new Error("Parle au moins une demi-seconde avant d'arrêter.");
+    voiceStatus("Transcription française en cours… Au premier usage, le modèle vocal local est récupéré automatiquement (environ 41 Mo).");
+    const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": "audio/wav"}, body: wav});
+    if (!result.text?.trim()) throw new Error("Aucune parole détectée. Essaie de parler plus près du micro.");
+    const input = $("requestText");
+    const joined = [input.value.trim(), result.text.trim()].filter(Boolean).join(" ");
+    input.value = joined.slice(0, input.maxLength);
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    voiceStatus("✓ Dictée retranscrite. Vérifie le texte puis clique sur Préparer le plan.");
+  } catch (error) {
+    voiceStatus("Transcription interrompue : " + error.message);
+    toast(error.message, true);
+  } finally { voice.busy = false; button.disabled = false; }
+}
+
+async function toggleVoiceRecording() {
+  if (voice.busy) return;
+  if (voice.stream) return finishVoiceRecording();
+  const button = $("voiceButton"); button.disabled = true;
+  try { await beginVoiceRecording(); }
+  catch (error) { voiceStatus("Impossible de démarrer le micro : " + error.message); toast(error.message, true); }
+  finally { button.disabled = false; }
+}
 
 function modal({title, description, fields = [], confirmText = "Confirmer", onConfirm}) {
   $("modalTitle").textContent = title;
@@ -517,6 +631,7 @@ async function init() {
   $("refreshButton").onclick = () => { loadDetails(); loadHistory(); toast("Actualisation lancée."); };
   $("structureRefresh").onclick = loadDetails;
   $("generateButton").onclick = createPlan;
+  $("voiceButton").onclick = toggleVoiceRecording;
   $("executeButton").onclick = executePlan;
   $("modeSelect").onchange = () => $("modelSelect").hidden = !app.models.length || $("modeSelect").value === "local";
   $("inviteButton").onclick = async () => { try { const data = await request("/api/invite"); window.open(data.url, "_blank", "noopener,noreferrer"); } catch (e) { toast(e.message, true); } };

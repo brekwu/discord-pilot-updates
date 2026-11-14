@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import errno
+from functools import lru_cache
+from io import BytesIO
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
+import urllib.request
 import webbrowser
-from zipfile import BadZipFile
+import wave
+from zipfile import BadZipFile, ZipFile
 
 import aiohttp
 from aiohttp import web
@@ -37,6 +44,9 @@ STATE = State()
 CSRF = secrets.token_urlsafe(32)
 ID_RE = re.compile(r"^\d{17,20}$")
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/brekwu/discord-pilot-updates/main/update.json"
+VOICE_MODEL_NAME = "vosk-model-small-fr-0.22"
+VOICE_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOICE_MODEL_NAME}.zip"
+MAX_VOICE_BYTES = 8 * 1024 * 1024  # 16 kHz mono WAV: about two minutes.
 
 
 def update_url() -> str:
@@ -176,6 +186,96 @@ async def asset(request):
     if name not in {"app.js", "style.css", "updates.css"}:
         raise web.HTTPNotFound()
     return web.FileResponse(BASE / "web" / name, headers={"Cache-Control": "no-store"})
+
+
+def ensure_voice_model(data_root: Path) -> Path:
+    """One-time automatic French model setup; never erase user settings."""
+    target = data_root / "speech" / VOICE_MODEL_NAME
+    if (target / "am" / "final.mdl").is_file():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(VOICE_MODEL_URL, headers={"User-Agent": "DiscordPilot-Voice/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            origin = urllib.parse.urlsplit(response.geturl())
+            if origin.scheme != "https" or origin.hostname not in {"alphacephei.com", "www.alphacephei.com"}:
+                raise ValueError("La source du modèle vocal a changé de domaine.")
+            raw = response.read(90 * 1024 * 1024 + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ValueError("Téléchargement automatique du modèle vocal français impossible. Réessaie avec Internet actif.") from exc
+    if len(raw) > 90 * 1024 * 1024:
+        raise ValueError("Le modèle vocal téléchargé dépasse la limite de sécurité.")
+    try:
+        with ZipFile(BytesIO(raw)) as archive:
+            members = archive.infolist()
+            if not members or sum(info.file_size for info in members) > 180 * 1024 * 1024:
+                raise ValueError("Archive du modèle vocal invalide ou trop volumineuse.")
+            for info in members:
+                parts = PurePosixPath(info.filename).parts
+                if not parts or parts[0] != VOICE_MODEL_NAME or ".." in parts or info.filename.startswith("/"):
+                    raise ValueError("Archive vocale contenant un chemin non autorisé.")
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    raise ValueError("Archive vocale contenant un lien non autorisé.")
+            # Extract to an isolated temporary directory, then publish in one move.
+            import tempfile
+            with tempfile.TemporaryDirectory(dir=target.parent) as temp:
+                archive.extractall(temp)
+                extracted = Path(temp) / VOICE_MODEL_NAME
+                if not (extracted / "am" / "final.mdl").is_file():
+                    raise ValueError("Fichiers du modèle vocal incomplets.")
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.move(str(extracted), str(target))
+    except BadZipFile as exc:
+        raise ValueError("Archive du modèle vocal illisible.") from exc
+    return target
+
+
+@lru_cache(maxsize=1)
+def load_voice_model(path: str):
+    try:
+        from vosk import Model, SetLogLevel
+    except ImportError as exc:
+        raise ValueError("Moteur de transcription indisponible dans cette version de l'application.") from exc
+    SetLogLevel(-1)
+    return Model(path)
+
+
+def transcribe_french_wav(payload: bytes, data_root: Path) -> str:
+    if not payload or len(payload) > MAX_VOICE_BYTES:
+        raise ValueError("Enregistrement vocal vide ou trop long (maximum 2 minutes).")
+    try:
+        with wave.open(BytesIO(payload), "rb") as wav:
+            if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != 16000:
+                raise ValueError("Audio non compatible : WAV mono, 16 kHz, 16 bits requis.")
+            if wav.getnframes() < 8000 or wav.getnframes() > 16000 * 120:
+                raise ValueError("Dicte entre 0,5 et 120 secondes.")
+            model = load_voice_model(str(ensure_voice_model(data_root)))
+            from vosk import KaldiRecognizer
+            recognizer = KaldiRecognizer(model, 16000)
+            phrases = []
+            while frames := wav.readframes(4000):
+                if recognizer.AcceptWaveform(frames):
+                    phrases.append(json.loads(recognizer.Result()).get("text", ""))
+            phrases.append(json.loads(recognizer.FinalResult()).get("text", ""))
+            return " ".join(p for p in phrases if p).strip()
+    except (wave.Error, EOFError) as exc:
+        raise ValueError("Enregistrement audio illisible.") from exc
+
+
+async def api_transcribe(request):
+    if request.content_type != "audio/wav":
+        raise ValueError("Envoie un enregistrement WAV pour la transcription.")
+    payload = await request.content.read(MAX_VOICE_BYTES + 1)
+    if len(payload) > MAX_VOICE_BYTES:
+        raise ValueError("Enregistrement trop volumineux.")
+    try:
+        result = await asyncio.to_thread(transcribe_french_wav, payload, STATE.root)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"La transcription locale a échoué ({type(exc).__name__}).") from exc
+    return web.json_response({"text": result, "language": "fr-FR", "local": True})
 
 
 async def api_health(request):
@@ -584,6 +684,7 @@ def build_app():
     app.router.add_get("/assets/{name}", asset)
     app.router.add_get("/api/bootstrap", api_bootstrap)
     app.router.add_get("/api/health", api_health)
+    app.router.add_post("/api/transcribe", api_transcribe)
     app.router.add_post("/api/connect", api_connect)
     app.router.add_post("/api/disconnect", api_disconnect)
     app.router.add_get("/api/invite", api_invite)

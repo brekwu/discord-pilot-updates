@@ -39,12 +39,15 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer les correctifs 0.4.7 d'interpretation IA des actions Discord
+      - name: Appliquer les correctifs 0.4.8 de dictee vocale locale en francais
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
           Copy-Item 'discord-pilot/planner.py' 'buildsrc/discord-pilot/planner.py' -Force
+          Copy-Item 'discord-pilot/requirements.txt' 'buildsrc/discord-pilot/requirements.txt' -Force
+          Copy-Item 'discord-pilot/web/index.html' 'buildsrc/discord-pilot/web/index.html' -Force
           Copy-Item 'discord-pilot/web/app.js' 'buildsrc/discord-pilot/web/app.js' -Force
+          Copy-Item 'discord-pilot/web/updates.css' 'buildsrc/discord-pilot/web/updates.css' -Force
           Copy-Item 'discord-pilot/tests/test_api.py' 'buildsrc/discord-pilot/tests/test_api.py' -Force
           Copy-Item 'discord-pilot/tests/test_natural_language.py' 'buildsrc/discord-pilot/tests/test_natural_language.py' -Force
           Copy-Item 'discord-pilot/version.json' 'buildsrc/discord-pilot/version.json' -Force
@@ -63,7 +66,7 @@ jobs:
       - name: Construire un exécutable unique
         working-directory: buildsrc/discord-pilot
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name DiscordPilot --add-data "web;web" --add-data "version.json;." --add-data "frozen_updater.ps1;." windows_entrypoint.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name DiscordPilot --collect-all vosk --add-data "web;web" --add-data "version.json;." --add-data "frozen_updater.ps1;." windows_entrypoint.py
 
       - name: Démarrer et tester l'EXE réel sous Windows
         shell: pwsh
@@ -80,7 +83,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.7' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.8' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -88,7 +91,27 @@ jobs:
             $page = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/' -TimeoutSec 10
             $asset = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/assets/app.js' -TimeoutSec 10
             if ($page.StatusCode -ne 200 -or $asset.StatusCode -ne 200) { throw 'Interface locale incomplète.' }
-            Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur HTTP, interface et JavaScript disponibles.'
+            if ($page.Content -notmatch 'voiceButton') { throw 'Bouton microphone absent de l interface Windows.' }
+            # Validate WAV format and first-use model provisioning in the compiled EXE.
+            $wavPath = Join-Path $PWD 'test-voice-silence.wav'
+            $pcm = New-Object byte[] (16000 * 2)
+            $stream = [System.IO.File]::Create($wavPath)
+            try {
+              $writer = [System.IO.BinaryWriter]::new($stream)
+              $writer.Write([System.Text.Encoding]::ASCII.GetBytes('RIFF'))
+              $writer.Write([int](36 + $pcm.Length))
+              $writer.Write([System.Text.Encoding]::ASCII.GetBytes('WAVEfmt '))
+              $writer.Write([int]16); $writer.Write([int16]1); $writer.Write([int16]1)
+              $writer.Write([int]16000); $writer.Write([int]32000)
+              $writer.Write([int16]2); $writer.Write([int16]16)
+              $writer.Write([System.Text.Encoding]::ASCII.GetBytes('data'))
+              $writer.Write([int]$pcm.Length)
+              $writer.Write($pcm)
+              $writer.Flush()
+            } finally { $stream.Dispose() }
+            $speech = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/transcribe' -Method POST -ContentType 'audio/wav' -Headers @{'X-Pilot-CSRF'=$data.csrf} -InFile $wavPath -TimeoutSec 180
+            if ($speech.language -ne 'fr-FR' -or -not $speech.local) { throw 'Le moteur vocal local ne fonctionne pas dans l EXE.' }
+            Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur, interface et moteur vocal Vosk francais.'
           } finally {
             try { & taskkill.exe /T /F /PID $p.Id *> $null } catch {}
           }
@@ -111,7 +134,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.7' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.8' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -144,7 +167,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $boot = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
-                if ($boot.version -eq '0.4.7') { $ready = $true; break }
+                if ($boot.version -eq '0.4.8') { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw 'L EXE s est arrete avant de preparer la mise a jour.' }
             }
@@ -154,7 +177,7 @@ jobs:
             # restart without needing to build an unpublishable second binary.
             Copy-Item $installed (Join-Path $updates 'pending.exe') -Force
             $hash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-            $pending = @{version='0.4.7';sha256=$hash;format='exe'} | ConvertTo-Json
+            $pending = @{version='0.4.8';sha256=$hash;format='exe'} | ConvertTo-Json
             [System.IO.File]::WriteAllText((Join-Path $updates 'pending.json'), $pending)
             $response = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/update/apply' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$boot.csrf} -Body '{}'
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
@@ -165,10 +188,10 @@ jobs:
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
                 $logPath = Join-Path $dataRoot 'updater.log'
-                if ($boot2.version -eq '0.4.7' -and
+                if ($boot2.version -eq '0.4.8' -and
                     -not (Test-Path (Join-Path $updates 'pending.json')) -and
                     (Test-Path $logPath) -and
-                    (Select-String -Path $logPath -Pattern 'Version 0.4.7 installee et ouverte' -Quiet)) {
+                    (Select-String -Path $logPath -Pattern 'Version 0.4.8 installee et ouverte' -Quiet)) {
                   $restarted = $true
                   break
                 }
@@ -216,11 +239,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.4.7
+          name: DiscordPilot_EXE_Windows_v0.4.8
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
 
-      - name: Publier la version 0.4.7 après les tests Windows
+      - name: Publier la version 0.4.8 après les tests Windows
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -236,23 +259,23 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Correction des erreurs Type d action inconnu ou interdit lors de la preparation des plans avec Ollama. Traduction securisee des noms d actions et champs usuels du modele IA, prise en charge du camelCase, et une correction de format automatique sans boucle de questions. Operations non prises en charge et privileges dangereux toujours refuses. 48 tests Python et tests Windows completes.'
-          $tag = 'v0.4.7'
+          $notes = 'Ajout du bouton Dicter dans Discord Pilot : enregistrement du microphone et retranscription locale en francais avec Vosk, sans cle API, sans paiement et sans installation manuelle. Le modele est telecharge automatiquement lors de la premiere dictee. Les vocaux sont traites en memoire sur la machine locale. L utilisateur peut parler sans garder le curseur dans le champ. Verification du format WAV, des permissions de session, du moteur integre et de la mise a jour Windows.'
+          $tag = 'v0.4.8'
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe $archive --clobber
           } else {
-            gh release create $tag $exe $archive --title 'Discord Pilot 0.4.7' --notes $notes
+            gh release create $tag $exe $archive --title 'Discord Pilot 0.4.8' --notes $notes
           }
           if ($LASTEXITCODE -ne 0) { throw 'La publication de la release a échoué.' }
 
           $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $archiveSha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
-            version = '0.4.7'
-            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.7/DiscordPilot_Source.zip'
+            version = '0.4.8'
+            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.8/DiscordPilot_Source.zip'
             sha256 = $archiveSha
-            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.7/DiscordPilot.exe'
+            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.8/DiscordPilot.exe'
             exe_sha256 = $exeSha
           }
           $json = ConvertTo-Json -InputObject $manifest -Depth 3
@@ -260,7 +283,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add update.json
-          git commit -m 'chore: publier le manifeste 0.4.7'
+          git commit -m 'chore: publier le manifeste 0.4.8'
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être enregistré.' }
           git push origin HEAD:main
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être publié.' }
