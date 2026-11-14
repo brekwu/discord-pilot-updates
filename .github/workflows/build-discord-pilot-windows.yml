@@ -1,0 +1,73 @@
+name: Construire et tester DiscordPilot.exe sur Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-discord-pilot-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Télécharger les sources de la version
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.0/DiscordPilot_Source.zip' -OutFile 'sources.zip'
+          Expand-Archive -LiteralPath 'sources.zip' -DestinationPath 'buildsrc'
+          if (-not (Test-Path 'buildsrc/discord-pilot/windows_entrypoint.py')) { throw 'Entrée Windows introuvable' }
+
+      - name: Installer les dépendances et exécuter les tests
+        working-directory: buildsrc/discord-pilot
+        run: |
+          python -m pip install -r requirements.txt pyinstaller
+          python -m unittest discover -s tests -q
+
+      - name: Construire un exécutable unique
+        working-directory: buildsrc/discord-pilot
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name DiscordPilot --add-data "web;web" --add-data "version.json;." --add-data "frozen_updater.ps1;." windows_entrypoint.py
+
+      - name: Démarrer et tester l'EXE réel sous Windows
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'buildsrc/discord-pilot/dist/DiscordPilot.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'EXE absent après compilation' }
+          $env:DISCORD_PILOT_NO_BROWSER = '1'
+          $env:LOCALAPPDATA = Join-Path $PWD 'test-discord-pilot-state'
+          New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+          $p = Start-Process -FilePath $exe -PassThru
+          $ready = $false
+          try {
+            for ($n = 0; $n -lt 60; $n++) {
+              Start-Sleep -Seconds 2
+              try {
+                $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
+                if ($data.version -eq '0.4.0' -and $data.online -eq $false) { $ready = $true; break }
+              } catch {}
+              if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
+            }
+            if (-not $ready) { throw 'Le serveur local n’a pas démarré en 120 secondes.' }
+            $page = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/' -TimeoutSec 10
+            $asset = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/assets/app.js' -TimeoutSec 10
+            if ($page.StatusCode -ne 200 -or $asset.StatusCode -ne 200) { throw 'Interface locale incomplète.' }
+            Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur HTTP, interface et JavaScript disponibles.'
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiscordPilot_EXE_Windows_v0.4.0
+          path: buildsrc/discord-pilot/dist/DiscordPilot.exe
+          if-no-files-found: error
