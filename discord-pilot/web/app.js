@@ -1,7 +1,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], catalog: {features: [], providers: {}}, moduleData: null, busy: false, updateAvailable: false };
+const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], catalog: {features: [], providers: {}}, moduleData: null, interactiveData: null, busy: false, updateAvailable: false };
 // No personal server identifiers are shipped in public updates; Discord provides real names after login.
 const known = {};
 const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations", suggest_integration: "Installer un bot externe (autorisation requise)", set_module: "Configurer un module local" };
@@ -266,12 +266,12 @@ function renderOverview() {
 }
 
 async function selectGuild(id) {
-  app.selected = id; app.details = null; app.history = []; app.plan = null; app.moduleData = null;
+  app.selected = id; app.details = null; app.history = []; app.plan = null; app.moduleData = null; app.interactiveData = null;
   localStorage.setItem("pilotGuild", id);
   $("planPanel").hidden = true;
   renderGuilds(); renderOverview();
   await Promise.all([loadDetails(), loadHistory()]);
-  await loadModules();
+  await Promise.all([loadModules(), loadInteractive()]);
 }
 
 async function loadDetails() {
@@ -387,7 +387,7 @@ async function bootstrap(quiet = false) {
     renderGuilds(); renderOverview();
     if (wasOnline !== data.online || (!quiet && app.selected)) {
       await Promise.all([loadDetails(), loadHistory()]);
-      if (app.tab === "modules") await loadModules();
+      if (app.tab === "modules") await Promise.all([loadModules(), loadInteractive()]);
     }
     return true;
   } catch (e) {
@@ -413,7 +413,7 @@ function switchTab(key) {
   app.tab = key;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === key));
   ["studio", "modules", "catalog", "structure", "history"].forEach(k => $(`${k}Tab`).hidden = k !== key);
-  if (key === "modules" && app.selected && !app.moduleData) loadModules();
+  if (key === "modules" && app.selected && !app.moduleData) Promise.all([loadModules(), loadInteractive()]);
 }
 
 async function loadModules() {
@@ -449,11 +449,13 @@ function renderModules() {
     for (const [name, kind, labelText] of spec.fields) {
       const label = dom("label", "module-label", labelText);
       let input;
-      if (["role", "text", "optional_text", "voice"].includes(kind)) {
+      if (["role", "optional_role", "text", "optional_text", "voice", "category"].includes(kind)) {
         input = dom("select", "module-input");
-        const empty = dom("option", "", kind === "optional_text" ? "Aucun salon" : "Choisir…"); empty.value = "";
+        const empty = dom("option", "", kind.startsWith("optional") ? "Aucun (facultatif)" : "Choisir…"); empty.value = "";
         input.append(empty);
-        const rows = kind === "role" ? (app.details?.roles || []) : (app.details?.channels || []).filter(c => c.type === (kind === "voice" ? "voice" : "text"));
+        const rows = kind === "category" ? (app.details?.categories || []) :
+          kind.includes("role") ? (app.details?.roles || []) :
+          (app.details?.channels || []).filter(c => c.type === (kind === "voice" ? "voice" : "text"));
         for (const item of rows) { const option = dom("option", "", item.name); option.value = item.id; input.append(option); }
       } else {
         input = dom("input", "module-input");
@@ -479,7 +481,14 @@ function renderModules() {
         await loadModules(); await bootstrap(true);
       } catch (e) { toast(e.message, true); save.disabled = false; }
     };
-    footer.append(toggle, save); article.append(footer); return article;
+    footer.append(toggle, save); article.append(footer);
+    if (spec.id === "tickets") {
+      const panel = dom("button", "outline-button", "🎟️ Publier le panneau de tickets");
+      panel.disabled = !data.online || !current.enabled;
+      panel.onclick = publishTicketPanel;
+      article.append(panel);
+    }
+    return article;
   }));
   const ranking = data.leaderboard || [];
   replace($("moduleLeaderboard"), ranking.length ? ranking.map((row, index) => {
@@ -487,6 +496,74 @@ function renderModules() {
     r.append(dom("span", "", `#${index + 1}`), dom("strong", "", `Membre ${row.member_id}`),
              dom("span", "", `Niveau ${row.level} · ${row.xp} XP`)); return r;
   }) : [dom("p", "empty", "Aucun XP enregistré : active le module et attends des messages réels.")]);
+}
+
+async function loadInteractive() {
+  if (!app.selected) return;
+  const id = app.selected;
+  try {
+    const events = await request(`/api/interactive/${id}`);
+    if (app.selected === id) app.interactiveData = events;
+  } catch (e) { toast(e.message, true); }
+  renderInteractive();
+}
+
+function renderInteractive() {
+  const channels = (app.details?.channels || []).filter(c => c.type === "text");
+  ["pollChannel", "giveawayChannel"].forEach(id => {
+    const node = $(id), current = node.value;
+    const empty = dom("option", "", "Choisir un salon"); empty.value = "";
+    replace(node, [empty, ...channels.map(channel => {
+      const option = dom("option", "", channel.name); option.value = channel.id; return option;
+    })]);
+    node.value = current && channels.some(c => c.id === current) ? current : "";
+  });
+  for (const id of ["pollForm", "giveawayForm"]) {
+    $(id).querySelector("button[type=submit]").disabled = !app.bootstrap?.online || !channels.length;
+  }
+  const data = app.interactiveData;
+  if (!data) { replace($("interactiveHistory"), [dom("p", "empty", "Aucun événement chargé.")]); return; }
+  const events = [...data.events].reverse();
+  const nodes = events.map(e => {
+    const row = dom("div", "module-rank");
+    const subject = e.type === "poll" ? e.question : e.prize;
+    const state = e.status === "closed" ? "Terminé" : "En cours";
+    row.append(dom("strong", "", `${e.type === "poll" ? "📊" : "🎁"} ${subject}`),
+               dom("span", "", `${state} · ${new Date(e.ends_at * 1000).toLocaleString("fr-FR")}`));
+    if (e.result) row.append(dom("small", "", e.type === "poll" ? `Votes : ${e.result.votes.join(" / ")}` : `Participants : ${e.result.participants} · Gagnant : ${e.result.winner_id || "aucun"}`));
+    return row;
+  });
+  const tickets = data.tickets || [];
+  if (tickets.length) nodes.unshift(dom("p", "module-description", `🎟️ ${tickets.filter(t => t.status === "open").length} ticket(s) ouvert(s) / ${tickets.length} au total.`));
+  replace($("interactiveHistory"), nodes.length ? nodes : [dom("p", "empty", "Pas encore de sondage ni de giveaway sur ce serveur.")]);
+}
+
+function publishTicketPanel() {
+  if (!app.selected) return;
+  modal({title: "Publier le panneau de tickets", description: "Un message avec un bouton sera publié dans le salon choisi. Les membres pourront créer un salon privé lorsqu'ils cliqueront dessus, si le bot est en ligne.",
+    confirmText: "Publier", onConfirm: async () => {
+      await request(`/api/interactive/${app.selected}/tickets/panel`, {data: {}});
+      toast("Panneau de tickets publié sur Discord."); await loadInteractive();
+    }});
+}
+
+function createInteractive(kind) {
+  if (!app.selected) return toast("Sélectionne un serveur.", true);
+  const data = kind === "poll" ? {
+    channel_id: $("pollChannel").value, question: $("pollQuestion").value.trim(),
+    options: $("pollOptions").value.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
+    minutes: Number($("pollMinutes").value),
+  } : {channel_id: $("giveawayChannel").value,
+       prize: $("giveawayPrize").value.trim(), minutes: Number($("giveawayMinutes").value)};
+  const channel = (app.details?.channels || []).find(c => c.id === data.channel_id);
+  if (!channel) return toast("Choisis un salon textuel disponible.", true);
+  modal({title: kind === "poll" ? "Publier le sondage ?" : "Lancer le giveaway ?",
+    description: `Publication réelle dans #${channel.name} sur ${currentGuild()?.name || "ce serveur"}. Les réactions seront ouvertes pendant ${data.minutes} minute(s).`,
+    confirmText: "Publier maintenant", onConfirm: async () => {
+      await request(`/api/interactive/${app.selected}/${kind}`, {data});
+      toast(kind === "poll" ? "Sondage publié sur Discord." : "Giveaway lancé sur Discord.");
+      await loadInteractive();
+    }});
 }
 
 async function loadCatalog() {
@@ -834,7 +911,9 @@ async function init() {
   $("catalogSearch").oninput = renderCatalog;
   $("catalogCategory").onchange = renderCatalog;
   $("catalogExternalOnly").onchange = renderCatalog;
-  $("refreshModules").onclick = async () => { await loadDetails(); await loadModules(); };
+  $("refreshModules").onclick = async () => { await loadDetails(); await Promise.all([loadModules(), loadInteractive()]); };
+  $("pollForm").onsubmit = e => { e.preventDefault(); createInteractive("poll"); };
+  $("giveawayForm").onsubmit = e => { e.preventDefault(); createInteractive("giveaway"); };
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => switchTab(t.dataset.tab));
   document.querySelectorAll("[data-example]").forEach(t => t.onclick = () => { $("requestText").value = t.dataset.example; switchTab("studio"); $("requestText").focus(); });
   await bootstrap(); renderPresets(); await loadCatalog(); await models();
