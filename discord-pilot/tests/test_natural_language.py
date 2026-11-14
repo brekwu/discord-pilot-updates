@@ -24,6 +24,48 @@ class LocalLanguageTests(unittest.TestCase):
         self.assertEqual(local_parse("Rajoute un channel vocal Général dans la catégorie COMMUNAUTÉ"),
                          [{"type": "create_voice_channel", "name": "Général", "category": "COMMUNAUTÉ"}])
 
+    def test_conversational_french_directly_creates_complete_drafts(self):
+        examples = (
+            "Je veux créer deux salons bienvenue et au revoir",
+            "Crée deux salons bienvenue et au revoir",
+            "J’aimerais créer deux salons bienvenue et au revoir",
+            "Tu peux me créer deux salons bienvenue et au revoir ?",
+            "Créer deux salons bienvenue et au revoir",
+            "Je voudrais que tu crées un salon bienvenue puis un salon au revoir",
+        )
+        expected = [{"type": "create_text_channel", "name": "bienvenue"},
+                    {"type": "create_text_channel", "name": "au revoir"}]
+        for utterance in examples:
+            with self.subTest(utterance=utterance):
+                self.assertEqual(local_parse(utterance), expected)
+
+    def test_natural_voice_and_role_commands(self):
+        self.assertEqual(local_parse("Ajoute-moi un vocal Général et un salon annonces"), [
+            {"type": "create_voice_channel", "name": "Général"},
+            {"type": "create_text_channel", "name": "annonces"},
+        ])
+        self.assertEqual(local_parse("Je veux un salon textuel pour les annonces"), [
+            {"type": "create_text_channel", "name": "annonces"},
+        ])
+        self.assertEqual(local_parse("Peux-tu créer les rôles Membre et Modérateur ?"), [
+            {"type": "create_role", "name": "Membre"},
+            {"type": "create_role", "name": "Modérateur"},
+        ])
+
+    def test_missing_names_keep_explicit_requested_count_without_clarifications(self):
+        self.assertEqual(default_creation_plan("Je veux deux salons"), [
+            {"type": "create_text_channel", "name": "nouveau-salon-1"},
+            {"type": "create_text_channel", "name": "nouveau-salon-2"},
+        ])
+        self.assertEqual(local_parse("Crée trois salons bienvenue et annonces"), [
+            {"type": "create_text_channel", "name": "bienvenue"},
+            {"type": "create_text_channel", "name": "annonces"},
+            {"type": "create_text_channel", "name": "nouveau-salon-3"},
+        ])
+
+    def test_unsupported_tail_does_not_create_a_partial_plan(self):
+        self.assertEqual(local_parse("Je veux créer un salon annonces ; et programme une campagne"), [])
+
     def test_incomplete_request_has_safe_draft_defaults(self):
         self.assertIn("Quel nom", missing_information("Rajoute un channel"))
         self.assertIn("Quel nom", missing_information("Ajoute un canal dans la catégorie ACCUEIL"))
@@ -50,6 +92,12 @@ class LocalLanguageTests(unittest.TestCase):
         actions, question = parse_ollama_decision('{"actions":[],"question":"Quel salon veux-tu créer ?"}')
         self.assertEqual(actions, [])
         self.assertEqual(question, "Quel salon veux-tu créer ?")
+
+    def test_model_response_variants_stay_within_allowlist(self):
+        actions, _ = parse_ollama_decision('{"operations":[{"type":"creer_salon_vocal", "name":"Général"}]}')
+        self.assertEqual(actions, [{"type": "create_voice_channel", "name": "Général"}])
+        actions, _ = parse_ollama_decision('<think>reasoning hidden</think>{"action":"creer_salon","name":"annonces"}')
+        self.assertEqual(actions, [{"type": "create_text_channel", "name": "annonces"}])
 
     def test_no_code_execution(self):
         with self.assertRaises(ValueError):
@@ -136,6 +184,12 @@ class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fake.calls), 2)
         self.assertIn("create_text_channel", fake.calls[1]["messages"][-1]["content"])
 
+        no_actions = FakeSession(['{"actions":[]}', repaired])
+        with patch.object(app.aiohttp, "ClientSession", return_value=no_actions):
+            recovered, _ = await app.ollama_plan("Je voudrais créer un salon bienvenue", "qwen-test")
+        self.assertEqual(recovered, [{"type": "create_text_channel", "name": "bienvenue"}])
+        self.assertEqual(len(no_actions.calls), 2)
+
         invalid = FakeSession([first, first])
         with patch.object(app.aiohttp, "ClientSession", return_value=invalid):
             with self.assertRaisesRegex(ValueError, "plan compatible"):
@@ -200,6 +254,19 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         body = await res.json()
         self.assertEqual(body["plan"]["status"], "draft")
         self.assertEqual(body["plan"]["actions"], [{"type": "create_text_channel", "name": "annonces"}])
+
+    async def test_conversational_request_skips_model_and_creates_both_channels(self):
+        with patch.object(app, "ollama_models", new=AsyncMock(side_effect=AssertionError("not needed"))):
+            res = await self.client.post("/api/plan", json={
+                "guild_id": "1567347687379050727", "mode": "auto",
+                "prompt": "Je veux créer deux salons bienvenue et au revoir",
+            }, headers=self.headers)
+        self.assertEqual(res.status, 200)
+        body = await res.json()
+        self.assertEqual(body["plan"]["actions"], [
+            {"type": "create_text_channel", "name": "bienvenue"},
+            {"type": "create_text_channel", "name": "au revoir"},
+        ])
 
     async def test_ai_cannot_invent_deletion(self):
         prompt = {"guild_id": "1567347687379050727", "mode": "ollama", "prompt": "Arrange les salons"}
