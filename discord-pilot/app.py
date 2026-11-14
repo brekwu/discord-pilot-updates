@@ -400,6 +400,16 @@ async def api_update_apply(request):
         raise ValueError("Une modification Discord est en cours : attends sa fin avant de mettre à jour.")
     if STOP_EVENT is None:
         raise ValueError("Le redémarrage automatique n'est pas disponible.")
+    if EXIT_FOR_UPDATE:
+        raise ValueError("Une mise à jour est déjà en cours d'installation.")
+    # Start the external updater *before* taking the HTTP server down. If
+    # PowerShell cannot be spawned, keep this instance alive and report it.
+    if frozen:
+        try:
+            launch_frozen_updater()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("Impossible de préparer le redémarrage automatique : "
+                             f"{type(exc).__name__}. Le programme reste ouvert.") from exc
     EXIT_FOR_UPDATE = True
     asyncio.get_running_loop().call_later(1.25, STOP_EVENT.set)
     return web.json_response({"ok": True, "restarting": True})
@@ -596,7 +606,6 @@ async def start_app():
         await runner.cleanup()
     if EXIT_FOR_UPDATE:
         if getattr(sys, "frozen", False):
-            launch_frozen_updater()
             return
         raise SystemExit(RESTART_UPDATE_CODE)
 
@@ -616,8 +625,11 @@ def launch_frozen_updater():
                "-File", str(helper), "-ExePath", sys.executable,
                "-PendingPath", str(folder / "pending.exe"),
                "-ExpectedHash", pending["sha256"], "-DataRoot", str(STATE.root),
-               "-ParentPid", str(os.getpid())]
-    subprocess.Popen(command, close_fds=True, creationflags=0x00000008 | 0x00000200)
+               "-ParentPid", str(os.getpid()), "-Port", str(PORT),
+               "-TargetVersion", pending["version"]]
+    subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, close_fds=True,
+                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
 
 
 def main():
