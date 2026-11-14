@@ -20,6 +20,19 @@ function Write-UpdateLog([string]$Message) {
     try { Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) $Message" -ErrorAction Stop } catch {}
 }
 
+function Get-ExecutableHash([string]$FilePath) {
+    # Works in Windows PowerShell 5.1 even when PSModulePath makes
+    # Get-FileHash / Microsoft.PowerShell.Utility unavailable.
+    $stream = [System.IO.File]::Open(
+        $FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+        finally { $sha.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
 function Start-DiscordPilot {
     # Keep the port stable so the original tab can poll /api/bootstrap and refresh.
     $env:DISCORD_PILOT_PORT = [string]$Port
@@ -35,7 +48,7 @@ try {
     if (-not ($TargetVersion -match '^\d{1,3}\.\d{1,3}\.\d{1,3}$')) { throw 'Version cible incorrecte.' }
     if (-not (Test-Path -LiteralPath $PendingPath -PathType Leaf)) { throw 'EXE telecharge introuvable.' }
     if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'EXE actuellement installe introuvable.' }
-    $realHash = (Get-FileHash -LiteralPath $PendingPath -Algorithm SHA256).Hash
+    $realHash = Get-ExecutableHash $PendingPath
     if ($realHash -ne $ExpectedHash) { throw 'Empreinte du programme non conforme.' }
 
     # PyInstaller --onefile sometimes keeps its parent bootloader alive after
@@ -65,7 +78,7 @@ try {
         }
     }
     if (-not $swapped) { throw 'Remplacement du programme impossible.' }
-    if ((Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash -ne $ExpectedHash) {
+    if ((Get-ExecutableHash $ExePath) -ne $ExpectedHash) {
         throw 'Le programme installe ne correspond pas au telechargement verifie.'
     }
 
