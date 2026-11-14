@@ -21,6 +21,7 @@ GID = "1567347687379050727"
 RID = "123456789012345678"
 CID = "223456789012345678"
 VID = "323456789012345678"
+CATID = "423456789012345678"
 
 
 class FakeRole:
@@ -49,9 +50,11 @@ class FakeGuild:
     def __init__(self):
         self.text = FakeChannel(CID, "text")
         self.voice = FakeChannel(VID, "voice")
+        self.category = FakeChannel(CATID, "category")
 
     def get_channel(self, cid):
-        return {self.text.id: self.text, self.voice.id: self.voice}.get(cid)
+        return {self.text.id: self.text, self.voice.id: self.voice,
+                self.category.id: self.category}.get(cid)
 
     def get_role(self, rid):
         return self.roles[0] if rid == self.roles[0].id else None
@@ -68,12 +71,16 @@ class ModuleLogicTests(unittest.TestCase):
 
     def test_every_module_opt_in_and_strict_config(self):
         guild = FakeGuild()
-        self.assertEqual(len(MODULES), 10)
+        self.assertEqual(len(MODULES), 11)
         self.assertEqual(normalize_module("autorole", {"enabled": True, "role_id": RID}, guild),
                          {"enabled": True, "role_id": RID})
         self.assertEqual(normalize_module("audit", {"enabled": True, "channel_id": CID}, guild)["channel_id"], CID)
         self.assertEqual(normalize_module("voice_rooms", {"enabled": True, "lobby_id": VID}, guild)["lobby_id"], VID)
         self.assertEqual(normalize_module("xp", {"enabled": True}, guild), {"enabled": True, "channel_id": ""})
+        self.assertEqual(normalize_module("tickets", {"enabled": True, "panel_channel_id": CID,
+                                                      "category_id": CATID}, guild),
+                         {"enabled": True, "panel_channel_id": CID, "category_id": CATID,
+                          "staff_role_id": ""})
         for name, config in [
             ("fake_module", {"enabled": True}),
             ("xp", {"enabled": "yes"}),
@@ -82,6 +89,7 @@ class ModuleLogicTests(unittest.TestCase):
             ("autorole", {"enabled": True, "role_id": CID}),
             ("audit", {"enabled": True, "channel_id": VID}),
             ("voice_rooms", {"enabled": True, "lobby_id": CID}),
+            ("tickets", {"enabled": True, "panel_channel_id": CID, "category_id": CID}),
             ("daily_post", {"enabled": True, "channel_id": CID, "hour": "25:99", "message": "bonjour"}),
             ("wordfilter", {"enabled": True, "words": ""}),
         ]:
@@ -149,7 +157,7 @@ class ModuleHttpTests(unittest.IsolatedAsyncioTestCase):
         result = await self.client.get(f"/api/modules/{GID}")
         self.assertEqual(result.status, 200)
         data = await result.json()
-        self.assertEqual(len(data["modules"]), 10)
+        self.assertEqual(len(data["modules"]), 11)
         self.assertFalse(data["online"])
         self.assertEqual(data["settings"], {})
         self.assertEqual((await self.client.post(f"/api/modules/{GID}/xp", json={"enabled": True})).status, 403)

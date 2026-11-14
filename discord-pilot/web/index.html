@@ -52,7 +52,7 @@
             <div class="stat-card"><span>Demandes</span><strong id="statPlans">—</strong><small>Plans enregistrés</small><b class="stat-icon blue">▤</b></div>
           </div>
 
-          <div class="tabs" role="tablist"><button data-tab="studio" class="tab active">✦ Studio IA <span class="badge-new">LOCAL</span></button><button data-tab="modules" class="tab">⚙ Modules actifs <span class="badge-new">10 NATIFS</span></button><button data-tab="catalog" class="tab">✧ Intégrations <span class="badge-new">90 IDÉES</span></button><button data-tab="structure" class="tab">▦ Structure du serveur</button><button data-tab="history" class="tab">◷ Historique</button></div>
+          <div class="tabs" role="tablist"><button data-tab="studio" class="tab active">✦ Studio IA <span class="badge-new">LOCAL</span></button><button data-tab="modules" class="tab">⚙ Modules actifs <span class="badge-new">TICKETS + JEUX</span></button><button data-tab="catalog" class="tab">✧ Intégrations <span class="badge-new">90 IDÉES</span></button><button data-tab="structure" class="tab">▦ Structure du serveur</button><button data-tab="history" class="tab">◷ Historique</button></div>
 
           <section id="studioTab" class="tab-panel">
             <div class="studio-header"><div><h3>Que veux-tu faire ?</h3><p>Décris les modifications de ton serveur comme tu le ferais à un assistant.</p></div><div class="assistant-badge">✦ <span>Assistant de configuration</span></div></div>
@@ -76,6 +76,13 @@
             <div class="section-heading"><div><h3>Modules réellement exécutés par ton bot</h3><p>Active chaque fonction serveur par serveur, choisis ses salons et rôles. Elles fonctionnent tant que ton application Windows est ouverte et le bot connecté.</p></div><button id="refreshModules" class="outline-button">↻ Vérifier</button></div>
             <div id="moduleStatus" class="catalog-disclaimer">Sélectionne un serveur connecté pour configurer les modules.</div>
             <div id="moduleGrid" class="module-grid"></div>
+            <div class="section-heading"><div><h3>Événements interactifs</h3><p>Publie un sondage ou un giveaway à réactions. Les résultats sont calculés à l'échéance, ou au prochain démarrage du bot si ton PC était éteint.</p></div></div>
+            <div class="interactive-grid">
+              <form id="pollForm" class="interactive-card"><h4>📊 Nouveau sondage</h4><label>Salon<select id="pollChannel" required></select></label><label>Question<input id="pollQuestion" maxlength="200" required placeholder="Quel jeu pour vendredi ?"></label><label>Réponses (une par ligne, de 2 à 9)<textarea id="pollOptions" rows="4" placeholder="Rocket League&#10;Valorant&#10;Clash of Clans" required></textarea></label><label>Durée en minutes<input id="pollMinutes" type="number" min="1" max="10080" value="60" required></label><button class="primary-button" type="submit">Publier le sondage →</button></form>
+              <form id="giveawayForm" class="interactive-card"><h4>🎁 Nouveau giveaway</h4><label>Salon<select id="giveawayChannel" required></select></label><label>Lot<input id="giveawayPrize" maxlength="200" placeholder="1 mois Discord Nitro" required></label><label>Durée en minutes<input id="giveawayMinutes" type="number" min="1" max="10080" value="1440" required></label><button class="primary-button" type="submit">Publier le giveaway →</button></form>
+            </div>
+            <div class="section-heading"><div><h3>Événements et tickets enregistrés</h3><p>Les actions réellement envoyées à Discord et leurs résultats.</p></div></div>
+            <div id="interactiveHistory" class="module-leaderboard"></div>
             <div class="section-heading"><div><h3>Classement XP</h3><p>Les scores sont conservés localement. Seuls les messages reçus quand le bot est connecté sont comptés.</p></div></div>
             <div id="moduleLeaderboard" class="module-leaderboard"></div>
           </section>

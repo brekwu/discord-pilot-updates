@@ -39,13 +39,14 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer les modules natifs 0.5.6
+      - name: Appliquer les modules et événements interactifs 0.5.7
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
           Copy-Item 'discord-pilot/planner.py' 'buildsrc/discord-pilot/planner.py' -Force
           Copy-Item 'discord-pilot/integration_catalog.py' 'buildsrc/discord-pilot/integration_catalog.py' -Force
           Copy-Item 'discord-pilot/community_modules.py' 'buildsrc/discord-pilot/community_modules.py' -Force
+          Copy-Item 'discord-pilot/community_interactions.py' 'buildsrc/discord-pilot/community_interactions.py' -Force
           Copy-Item 'discord-pilot/discord_ops.py' 'buildsrc/discord-pilot/discord_ops.py' -Force
           Copy-Item 'discord-pilot/storage.py' 'buildsrc/discord-pilot/storage.py' -Force
           Copy-Item 'discord-pilot/updater.py' 'buildsrc/discord-pilot/updater.py' -Force
@@ -60,6 +61,7 @@ jobs:
           Copy-Item 'discord-pilot/tests/test_automations.py' 'buildsrc/discord-pilot/tests/test_automations.py' -Force
           Copy-Item 'discord-pilot/tests/test_integrations.py' 'buildsrc/discord-pilot/tests/test_integrations.py' -Force
           Copy-Item 'discord-pilot/tests/test_community_modules.py' 'buildsrc/discord-pilot/tests/test_community_modules.py' -Force
+          Copy-Item 'discord-pilot/tests/test_interactive.py' 'buildsrc/discord-pilot/tests/test_interactive.py' -Force
           Copy-Item 'discord-pilot/version.json' 'buildsrc/discord-pilot/version.json' -Force
           Copy-Item 'discord-pilot/frozen_updater.ps1' 'buildsrc/discord-pilot/frozen_updater.ps1' -Force
           Copy-Item 'discord-pilot/demarrer.ps1' 'buildsrc/discord-pilot/demarrer.ps1' -Force
@@ -93,7 +95,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.6' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.7' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -132,7 +134,16 @@ jobs:
             $types = @($automations.plan.actions | ForEach-Object { $_.type })
             if ($automations.plan.status -ne 'draft' -or $types.Count -ne 5 -or $types[0] -ne 'create_text_channel' -or $types[1] -ne 'create_text_channel' -or $types[2] -ne 'configure_welcome' -or $types[3] -ne 'configure_farewell' -or $types[4] -ne 'configure_invites') { throw 'Les automatisations bienvenue, depart et invitation ne sont pas toutes dans le plan.' }
             $native = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/modules/1567347687379050727' -TimeoutSec 10
-            if ($native.modules.Count -ne 10 -or $native.online -or $page.Content -notmatch 'modulesTab') { throw 'Les dix modules natifs ne sont pas visibles ou leur etat hors ligne est incorrect.' }
+            if ($native.modules.Count -ne 11 -or $native.online -or $page.Content -notmatch 'modulesTab') { throw 'Les onze modules natifs ne sont pas visibles ou leur etat hors ligne est incorrect.' }
+            $interactive = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/interactive/1567347687379050727' -TimeoutSec 10
+            if ($null -eq $interactive.events -or $null -eq $interactive.tickets -or $page.Content -notmatch 'pollForm' -or $page.Content -notmatch 'giveawayForm') { throw 'L interface des tickets, sondages et giveaways est absente.' }
+            $offlineEvent = @{channel_id='223456789012345678';minutes=1;prize='Test'} | ConvertTo-Json
+            try {
+              Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/interactive/1567347687379050727/giveaway' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($offlineEvent)) -ErrorAction Stop
+              throw 'Un giveaway a ete publie alors que le bot est hors ligne.'
+            } catch {
+              if ($_.Exception.Message -like 'Un giveaway*') { throw }
+            }
             $nativePrompt = @{guild_id='1567347687379050727';mode='auto';prompt="Active l'XP"} | ConvertTo-Json
             $nativeDraft = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/plan' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($nativePrompt)) -TimeoutSec 90
             if ($nativeDraft.plan.status -ne 'draft' -or $nativeDraft.plan.actions[0].type -ne 'set_module' -or $nativeDraft.plan.actions[0].module -ne 'xp') { throw 'La demande native XP ne cree pas de plan.' }
@@ -157,7 +168,7 @@ jobs:
             }
             if (-not $approval) { throw 'Installation tierce incorrectement annoncee comme terminee sans OAuth Discord.' }
             Write-Host 'INTEGRATIONS WINDOWS OK : 90 fiches, 4 bots, aucune installation fictive.'
-            Write-Host 'MODULES WINDOWS OK : 10 modules natifs et plan XP ; aucune activation en mode hors ligne.'
+            Write-Host 'MODULES WINDOWS OK : 11 modules natifs, tickets, sondages et giveaways disponibles ; aucune activation en mode hors ligne.'
             Write-Host 'AUTOMATISATIONS WINDOWS OK : deux salons, trois regles, sans execution Discord prematuree.'
             Write-Host 'PLANIFICATEUR WINDOWS OK : demande naturelle, deux salons et brouillon sans precisions.'
             Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur, Whisper Small, WAV complet de huit secondes, lecture et interface.'
@@ -183,7 +194,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.6' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.7' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -216,7 +227,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $boot = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
-                if ($boot.version -eq '0.5.6') { $ready = $true; break }
+                if ($boot.version -eq '0.5.7') { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw 'L EXE s est arrete avant de preparer la mise a jour.' }
             }
@@ -226,7 +237,7 @@ jobs:
             # restart without needing to build an unpublishable second binary.
             Copy-Item $installed (Join-Path $updates 'pending.exe') -Force
             $hash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-            $pending = @{version='0.5.6';sha256=$hash;format='exe'} | ConvertTo-Json
+            $pending = @{version='0.5.7';sha256=$hash;format='exe'} | ConvertTo-Json
             [System.IO.File]::WriteAllText((Join-Path $updates 'pending.json'), $pending)
             $response = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/update/apply' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$boot.csrf} -Body '{}'
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
@@ -237,10 +248,10 @@ jobs:
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
                 $logPath = Join-Path $dataRoot 'updater.log'
-                if ($boot2.version -eq '0.5.6' -and
+                if ($boot2.version -eq '0.5.7' -and
                     -not (Test-Path (Join-Path $updates 'pending.json')) -and
                     (Test-Path $logPath) -and
-                    (Select-String -Path $logPath -Pattern 'Version 0.5.6 installee et ouverte' -Quiet)) {
+                    (Select-String -Path $logPath -Pattern 'Version 0.5.7 installee et ouverte' -Quiet)) {
                   $restarted = $true
                   break
                 }
@@ -288,11 +299,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.5.6
+          name: DiscordPilot_EXE_Windows_v0.5.7
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
 
-      - name: Publier la version 0.5.6 après les tests Windows
+      - name: Publier la version 0.5.7 après les tests Windows
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -300,7 +311,7 @@ jobs:
           $exe = (Resolve-Path 'buildsrc/discord-pilot/dist/DiscordPilot.exe').Path
           $sourceRoot = Join-Path $PWD 'source-clean/discord-pilot'
           New-Item -ItemType Directory -Force -Path $sourceRoot | Out-Null
-          $allowed = @('app.py', 'planner.py', 'integration_catalog.py', 'community_modules.py', 'storage.py', 'discord_ops.py', 'updater.py', 'updater_cli.py', 'requirements.txt', 'version.json', 'README.md', 'web/index.html', 'web/app.js', 'web/style.css', 'web/updates.css', 'LANCER_DISCORD_PILOT.bat', 'DEMARRER_DISCORD_PILOT.cmd', 'demarrer.ps1', 'CONSTRUIRE_EXE_WINDOWS.bat')
+          $allowed = @('app.py', 'planner.py', 'integration_catalog.py', 'community_modules.py', 'community_interactions.py', 'storage.py', 'discord_ops.py', 'updater.py', 'updater_cli.py', 'requirements.txt', 'version.json', 'README.md', 'web/index.html', 'web/app.js', 'web/style.css', 'web/updates.css', 'LANCER_DISCORD_PILOT.bat', 'DEMARRER_DISCORD_PILOT.cmd', 'demarrer.ps1', 'CONSTRUIRE_EXE_WINDOWS.bat')
           foreach ($relative in $allowed) {
             $destination = Join-Path $sourceRoot $relative
             New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
@@ -308,23 +319,23 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Dix modules locaux activables par serveur : autorole, XP/niveaux/classement, antispam, anti-liens, filtre de mots, journaux edits/suppressions, votes suggestions, salons vocaux temporaires, role par reaction, annonces quotidiennes. Tableau de bord, stockage et tests. Six fiches du catalogue 90 identifiees comme modules natifs ; les autres restent externes a autoriser ou prevues. Les integrations tierces (dont musique) ne sont pas installees automatiquement. Pas d hebergement : les evenements requierent le bot local connecte. Tests unitaires et EXE Windows.'
-          $tag = 'v0.5.6'
+          $notes = 'Onze modules locaux : les dix precedents et les tickets prives (panneau, ouverture, fermeture et archivage). Sondages de 2 a 9 reponses et giveaways par reaction, avec resultats enregistres et annonces lorsque le bot fonctionne, y compris au redemarrage apres une echeance. Neuf fiches du catalogue 90 sont maintenant identifiees comme natives, les autres restent externes ou prevues. Aucun bot tiers installe sans autorisation Discord. Programme local sans hebergement. Tests unitaires et EXE Windows.'
+          $tag = 'v0.5.7'
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe $archive --clobber
           } else {
-            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.6' --notes $notes
+            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.7' --notes $notes
           }
           if ($LASTEXITCODE -ne 0) { throw 'La publication de la release a échoué.' }
 
           $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $archiveSha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
-            version = '0.5.6'
-            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.6/DiscordPilot_Source.zip'
+            version = '0.5.7'
+            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.7/DiscordPilot_Source.zip'
             sha256 = $archiveSha
-            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.6/DiscordPilot.exe'
+            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.7/DiscordPilot.exe'
             exe_sha256 = $exeSha
           }
           $json = ConvertTo-Json -InputObject $manifest -Depth 3
@@ -332,7 +343,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add update.json
-          git commit -m 'chore: publier le manifeste 0.5.6'
+          git commit -m 'chore: publier le manifeste 0.5.7'
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être enregistré.' }
           git push origin HEAD:main
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être publié.' }

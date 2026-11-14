@@ -212,10 +212,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         status = await self.client.get("/api/update/status")
         self.assertEqual((await status.json())["version"], app.read_version(app.BASE))
         form = FormData()
-        form.add_field("file", make_archive("0.5.7"), filename="discord-pilot-update.zip", content_type="application/zip")
+        form.add_field("file", make_archive("0.5.8"), filename="discord-pilot-update.zip", content_type="application/zip")
         import_response = await self.client.post("/api/update/import", data=form, headers=header)
         self.assertEqual(import_response.status, 200)
-        self.assertEqual((await import_response.json())["pending"]["version"], "0.5.7")
+        self.assertEqual((await import_response.json())["pending"]["version"], "0.5.8")
         previous_stop, previous_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
         old_launcher = os.environ.get("DISCORD_PILOT_LAUNCHER")
         try:

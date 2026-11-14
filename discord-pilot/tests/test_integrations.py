@@ -33,7 +33,7 @@ class IntegrationRoutingTests(unittest.TestCase):
                 self.assertTrue(provider["url"].startswith("https://"))
             else:
                 self.assertEqual(feature["availability"], "planned")
-        self.assertEqual(sum(bool(feature["native_module"]) for feature in features), 6)
+        self.assertEqual(sum(bool(feature["native_module"]) for feature in features), 9)
 
     def test_recognize_multiple_requests_and_do_not_falsely_claim_installation(self):
         self.assertEqual(recommended_providers(
