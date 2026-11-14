@@ -30,12 +30,12 @@ TRUSTED_HOSTS = {
     "objects.githubusercontent.com", "release-assets.githubusercontent.com",
 }
 UPDATABLE = {
-    "app.py", "planner.py", "storage.py", "discord_ops.py", "integration_catalog.py", "community_modules.py", "community_interactions.py", "updater.py", "updater_cli.py",
+    "app.py", "planner.py", "storage.py", "discord_ops.py", "integration_catalog.py", "community_modules.py", "community_interactions.py", "community_support.py", "updater.py", "updater_cli.py",
     "requirements.txt", "version.json", "README.md", "web/index.html", "web/app.js", "web/style.css", "web/updates.css",
     "LANCER_DISCORD_PILOT.bat", "DEMARRER_DISCORD_PILOT.cmd", "demarrer.ps1", "CONSTRUIRE_EXE_WINDOWS.bat",
 }
 REQUIRED = {
-    "app.py", "community_modules.py", "community_interactions.py", "integration_catalog.py", "updater.py", "updater_cli.py", "version.json", "web/index.html", "web/app.js",
+    "app.py", "community_modules.py", "community_interactions.py", "community_support.py", "integration_catalog.py", "updater.py", "updater_cli.py", "version.json", "web/index.html", "web/app.js",
     "web/style.css", "web/updates.css", "demarrer.ps1", "DEMARRER_DISCORD_PILOT.cmd",
 }
 VERSION_FORMAT = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
