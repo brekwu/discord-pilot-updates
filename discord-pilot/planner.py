@@ -7,12 +7,15 @@ import re
 import unicodedata
 from typing import Any
 
+from integration_catalog import PROVIDERS
+
 
 ACTION_TYPES = {
     "create_category", "create_text_channel", "create_voice_channel",
     "create_role", "rename_channel", "rename_role", "set_topic",
     "send_message", "make_private", "delete_channel", "delete_role",
     "configure_welcome", "configure_farewell", "configure_invites",
+    "suggest_integration",
 }
 
 ACTION_LABELS = {
@@ -30,6 +33,7 @@ ACTION_LABELS = {
     "configure_welcome": "Activer les messages d'arrivée",
     "configure_farewell": "Activer les messages de départ",
     "configure_invites": "Activer le suivi des invitations",
+    "suggest_integration": "Préparer l'autorisation du bot externe",
 }
 
 DANGEROUS_ACTIONS = {"delete_channel", "delete_role"}
@@ -49,6 +53,7 @@ FIELDS = {
     "configure_welcome": ("channel",),
     "configure_farewell": ("channel",),
     "configure_invites": ("channel",),
+    "suggest_integration": ("provider",),
 }
 
 OPTIONAL = {
@@ -152,6 +157,8 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
                 if not isinstance(item[key], str) or not item[key].strip():
                     raise ValueError(f"Champ optionnel {key} invalide.")
                 fields[key] = compact(item[key])
+        if kind == "suggest_integration" and fields["provider"] not in PROVIDERS:
+            raise ValueError("Application externe non référencée dans le catalogue officiel de Discord Pilot.")
         if kind == "send_message" and len(fields["content"]) > 1800:
             raise ValueError("Le message dépasse la limite de 1 800 caractères.")
         if kind != "send_message" and any(len(v) > 900 for v in fields.values()):
@@ -538,6 +545,8 @@ def local_parse(prompt: str) -> list[dict[str, str]]:
 
 def description(item: dict[str, str]) -> str:
     label = ACTION_LABELS[item["type"]]
+    if item["type"] == "suggest_integration":
+        return f"{label} : {PROVIDERS[item['provider']]['name']} (validation Discord obligatoire)"
     if item["type"].startswith("configure_"):
         return f"{label} dans #{item['channel']} (bot local connecté requis)"
     if item["type"] == "send_message":
