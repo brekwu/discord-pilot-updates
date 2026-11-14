@@ -6,6 +6,8 @@ const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGu
 const known = {};
 const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE" };
 const icons = ["⌂", "♧", "♜", "▤"];
+let serverWasUnavailable = false;
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function dom(tag, className, value) { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = String(value); return node; }
 function replace(node, children) { node.replaceChildren(...children); }
@@ -15,7 +17,12 @@ function time(iso) { try { return new Date(iso).toLocaleString("fr-FR", {dateSty
 async function request(path, options = {}) {
   const init = { ...options, headers: { ...(options.headers || {}), "X-Pilot-CSRF": app.csrf } };
   if (options.data !== undefined) { init.method = options.method || "POST"; init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(options.data); }
-  const res = await fetch(path, init);
+  let res;
+  try { res = await fetch(path, init); }
+  catch (error) {
+    if (error instanceof TypeError) throw new Error("Connexion locale interrompue. Discord Pilot essaie de se reconnecter automatiquement.");
+    throw error;
+  }
   let data = {};
   try { data = await res.json(); } catch { throw new Error("Réponse serveur illisible."); }
   if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
@@ -198,6 +205,8 @@ function renderPlan() {
 async function bootstrap(quiet = false) {
   try {
     const data = await request("/api/bootstrap"); app.csrf = data.csrf;
+    if (serverWasUnavailable) toast("Discord Pilot est de nouveau disponible.");
+    serverWasUnavailable = false;
     const wasOnline = app.bootstrap?.online; app.bootstrap = data;
     $("connectionBadge").className = `connection-badge ${data.online ? "online" : ""}`;
     $("connectionBadge").innerHTML = "<i></i>"; $("connectionBadge").append(document.createTextNode(data.online ? "Bot connecté" : data.connecting ? "Connexion…" : "Déconnecté"));
@@ -209,7 +218,15 @@ async function bootstrap(quiet = false) {
     if (!app.selected && guilds().length) app.selected = guilds()[0].id;
     renderGuilds(); renderOverview();
     if (wasOnline !== data.online || (!quiet && app.selected)) await Promise.all([loadDetails(), loadHistory()]);
-  } catch (e) { if (!quiet) toast("Application locale indisponible : " + e.message, true); }
+    return true;
+  } catch (e) {
+    $("connectionBadge").className = "connection-badge";
+    $("connectionBadge").textContent = "↻ Reconnexion…";
+    $("profileText").textContent = "Redémarrage du serveur local…";
+    if (!serverWasUnavailable || !quiet) toast("Reconnexion automatique en cours. Garde cette page ouverte.", true);
+    serverWasUnavailable = true;
+    return false;
+  }
 }
 
 async function models() {
@@ -374,10 +391,17 @@ async function updatesMenu() {
     install.disabled = true;
     try {
       const previousVersion = status.version;
-      await request("/api/update/apply", {data: {}});
+      const targetVersion = status.pending?.version;
+      if (!targetVersion) throw new Error("Aucune mise à jour prête à installer.");
+      // The server may close just before the HTTP response reaches the browser.
+      // In that case, keep watching for the new version instead of reporting a network error.
+      try { await request("/api/update/apply", {data: {}}); }
+      catch (error) {
+        if (!/connexion locale interrompue/i.test(error.message)) throw error;
+      }
       $("modalBackdrop").hidden = true;
-      toast("L'application redémarre pour installer la mise à jour…");
-      await waitForVersion(previousVersion);
+      toast("Installation en cours… La page se reconnectera automatiquement.");
+      await waitForVersion(previousVersion, targetVersion);
     } catch (e) { install.disabled = false; toast(e.message, true); }
   };
   actions.append(save, check);
@@ -403,23 +427,73 @@ async function updatesMenu() {
   body.append(extra, download);
 }
 
-async function waitForVersion(previousVersion) {
-  await new Promise(resolve => setTimeout(resolve, 1800));
-  // Windows can need time to release the one-file EXE before replacing it.
-  for (let attempt = 0; attempt < 180; attempt++) {
+async function probeVersionOnCurrentPort(expectedVersion) {
+  const response = await fetch(`/api/bootstrap?probe=${Date.now()}`, {
+    cache: "no-store", signal: AbortSignal.timeout(2300),
+  });
+  if (!response.ok) return false;
+  const data = await response.json();
+  if (data.version !== expectedVersion) return false;
+  // Check that static files are served too before navigating to the new page.
+  const assets = await fetch(`/assets/app.js?probe=${Date.now()}`, {
+    cache: "no-store", signal: AbortSignal.timeout(2300),
+  });
+  return assets.ok;
+}
+
+async function findRestartedPort(expectedVersion) {
+  const originalPort = Number(window.location.port || 80);
+  const hostname = window.location.hostname;
+  if (!Number.isInteger(originalPort) || originalPort < 1 || originalPort > 65530 || !["127.0.0.1", "localhost"].includes(hostname)) return null;
+  // Only a minimal /api/health endpoint exposes CORS to other loopback ports.
+  const ports = Array.from({length: 5}, (_, i) => originalPort + i + 1);
+  const probes = ports.map(async port => {
     try {
-      const response = await fetch("/api/bootstrap", {cache: "no-store", signal: AbortSignal.timeout(2500)});
-      if (!response.ok) throw new Error("Le serveur redémarre.");
-      const info = await response.json();
-      if (info.version !== previousVersion) {
-        // Force fresh assets instead of reusing the previous JavaScript bundle.
-        window.location.replace(`${window.location.pathname}?updated=${Date.now()}`);
-        return;
-      }
-    } catch { /* Le serveur est en cours de redémarrage. */ }
-    await new Promise(resolve => setTimeout(resolve, 1000));
+      const origin = `${window.location.protocol}//${hostname}:${port}`;
+      const response = await fetch(`${origin}/api/health?probe=${Date.now()}`, {
+        cache: "no-store", signal: AbortSignal.timeout(1000),
+      });
+      if (!response.ok) return null;
+      const health = await response.json();
+      return health.discord_pilot === true && health.version === expectedVersion ? origin : null;
+    } catch { return null; }
+  });
+  return (await Promise.all(probes)).find(Boolean) || null;
+}
+
+async function waitForVersion(previousVersion, expectedVersion) {
+  await delay(1400);
+  const deadline = Date.now() + 180000;
+  let consecutiveReady = 0;
+  let lastAlternative = null;
+  let alternativeReady = 0;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    try {
+      if (expectedVersion !== previousVersion && await probeVersionOnCurrentPort(expectedVersion)) {
+        consecutiveReady += 1;
+        if (consecutiveReady >= 2) {
+          // Only refresh after the new HTTP server has proved it is stable.
+          window.location.replace(`${window.location.pathname}?updated=${Date.now()}`);
+          return;
+        }
+      } else { consecutiveReady = 0; }
+    } catch { consecutiveReady = 0; }
+    if (attempt % 4 === 0) {
+      const alternative = await findRestartedPort(expectedVersion);
+      if (alternative) {
+        alternativeReady = alternative === lastAlternative ? alternativeReady + 1 : 1;
+        lastAlternative = alternative;
+        if (alternativeReady >= 2) {
+          window.location.replace(`${alternative}/?updated=${Date.now()}`);
+          return;
+        }
+      } else { alternativeReady = 0; }
+    }
+    attempt += 1;
+    await delay(1000);
   }
-  toast("Redémarrage non confirmé. Journal : %LOCALAPPDATA%\\DiscordPilot\\updater.log", true);
+  toast("Mise à jour non confirmée. Discord Pilot se reconnectera dès que le serveur sera disponible. Consulte le journal updater.log ou launcher.log dans %LOCALAPPDATA%\\DiscordPilot.", true);
 }
 
 async function backgroundUpdateCheck() {
@@ -454,7 +528,7 @@ async function init() {
   setInterval(async () => {
     await bootstrap(true);
     if (app.plan && ["queued", "running"].includes(app.plan.status)) await loadHistory();
-  }, 3500);
+  }, 1800);
   setInterval(models, 25000);
   setInterval(backgroundUpdateCheck, 6 * 60 * 60 * 1000);
 }
