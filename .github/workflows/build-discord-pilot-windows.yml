@@ -156,7 +156,7 @@ jobs:
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
 
             $restarted = $false
-            for ($n = 0; $n -lt 90; $n++) {
+            for ($n = 0; $n -lt 65; $n++) {
               Start-Sleep -Seconds 1
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
@@ -180,6 +180,13 @@ jobs:
               if (Test-Path (Join-Path $dataRoot 'updater.log')) {
                 Get-Content (Join-Path $dataRoot 'updater.log')
               }
+              foreach ($probePort in @(9337,9338,9339,9340)) {
+                try {
+                  $probe = Invoke-RestMethod -Uri "http://127.0.0.1:$probePort/api/bootstrap" -TimeoutSec 2
+                  Write-Host "Diagnostic port $probePort : version $($probe.version)"
+                } catch { Write-Host "Diagnostic port $probePort : aucune reponse" }
+              }
+              netstat -ano | Select-String -Pattern ':933[7-9]|:9340'
               throw 'Le bouton de mise a jour n a pas remplace et redemarre l EXE automatiquement.'
             }
             if ((Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {

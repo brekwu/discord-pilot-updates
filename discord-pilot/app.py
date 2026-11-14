@@ -595,6 +595,12 @@ async def start_app():
         print(f"Port {PORT} déjà occupé : utilisation du port {actual_port}.", flush=True)
     PORT = actual_port  # Keep the localhost/CSRF checks aligned with the real socket.
     print(f"Discord Pilot : http://127.0.0.1:{PORT}", flush=True)
+    if os.getenv("DISCORD_PILOT_RESTART_PROBE") == "1":
+        try:
+            with (STATE.root / "updater.log").open("a", encoding="utf-8") as log:
+                log.write(f"Demarrage nouvelle instance : PID={os.getpid()}, port={PORT}\n")
+        except OSError:
+            pass
     saved = load_token(STATE.root)
     if saved:
         await MANAGER.connect(saved, remember=False)

@@ -55,6 +55,7 @@ function Start-DiscordPilot {
     # Keep the port stable so the original tab can poll /api/bootstrap and refresh.
     $env:DISCORD_PILOT_PORT = [string]$Port
     $env:DISCORD_PILOT_NO_BROWSER = '1'
+    $env:DISCORD_PILOT_RESTART_PROBE = '1'
     $child = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path -Parent $ExePath) -PassThru -ErrorAction Stop
     Write-UpdateLog "EXE relance; PID=$($child.Id), port=$Port"
     return $child
@@ -106,7 +107,14 @@ try {
         try {
             $runningVersion = Get-RunningServerVersion
             if ($runningVersion -eq $TargetVersion) { $ready = $true; break }
-        } catch {}
+            if ($attempt -eq 1 -or $attempt % 20 -eq 0) {
+                Write-UpdateLog "Sonde HTTP : tentative $attempt, version=$runningVersion"
+            }
+        } catch {
+            if ($attempt -eq 1 -or $attempt % 20 -eq 0) {
+                Write-UpdateLog "Sonde HTTP : tentative $attempt, erreur=$($_.Exception.GetType().Name)"
+            }
+        }
         $newProcess.Refresh()
         if ($newProcess.HasExited) { throw 'Le nouvel EXE s est arrete avant de demarrer son serveur.' }
         Start-Sleep -Seconds 1
