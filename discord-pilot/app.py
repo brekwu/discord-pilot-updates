@@ -536,9 +536,10 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
                 if not isinstance(answer, str):
                     raise ValueError("Réponse IA non textuelle.")
                 actions, question = parse_ollama_decision(answer)
-                if actions or not question:
-                    return actions, question
-                problem = "Une demande de précisions ne constitue pas un plan."
+                if actions:
+                    return actions, None
+                problem = ("Une demande de précisions ne constitue pas un plan."
+                           if question else "Le modèle n'a proposé aucune action.")
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 problem = str(exc)
             if attempt == 1:
