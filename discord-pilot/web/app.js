@@ -425,18 +425,21 @@ async function updatesMenu() {
 
 async function waitForVersion(previousVersion) {
   await new Promise(resolve => setTimeout(resolve, 1800));
-  for (let attempt = 0; attempt < 50; attempt++) {
+  // Windows can need time to release the one-file EXE before replacing it.
+  for (let attempt = 0; attempt < 180; attempt++) {
     try {
-      const response = await fetch("/api/bootstrap", {cache: "no-store"});
+      const response = await fetch("/api/bootstrap", {cache: "no-store", signal: AbortSignal.timeout(2500)});
+      if (!response.ok) throw new Error("Le serveur redémarre.");
       const info = await response.json();
       if (info.version !== previousVersion) {
-        window.location.reload();
+        // Force fresh assets instead of reusing the previous JavaScript bundle.
+        window.location.replace(`${window.location.pathname}?updated=${Date.now()}`);
         return;
       }
     } catch { /* Le serveur est en cours de redémarrage. */ }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  toast("La mise à jour n'est pas confirmée. Consulte la fenêtre de lancement et son journal.", true);
+  toast("Redémarrage non confirmé. Journal : %LOCALAPPDATA%\\DiscordPilot\\updater.log", true);
 }
 
 async function backgroundUpdateCheck() {
