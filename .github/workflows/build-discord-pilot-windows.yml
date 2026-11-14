@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-test:
@@ -108,3 +108,14 @@ jobs:
           name: DiscordPilot_EXE_Windows_v0.4.2
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
+
+      - name: Publier la version 0.4.2 après les tests Windows
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = (Resolve-Path 'buildsrc/discord-pilot/dist/DiscordPilot.exe').Path
+          Compress-Archive -Path 'buildsrc/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
+          $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
+          $notes = 'Corrige le refus des tokens basé uniquement sur leur longueur. La vérification est désormais réalisée par Discord, et le studio affiche la réponse avant de fermer la fenêtre. Test Windows : démarrage normal et port occupé. Le raccordement à un vrai bot exige le token personnel de son propriétaire.'
+          gh release create v0.4.2 $exe $archive --title 'Discord Pilot 0.4.2 — connexion du bot' --notes $notes --latest
