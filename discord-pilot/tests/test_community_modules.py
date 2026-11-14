@@ -71,7 +71,7 @@ class ModuleLogicTests(unittest.TestCase):
 
     def test_every_module_opt_in_and_strict_config(self):
         guild = FakeGuild()
-        self.assertEqual(len(MODULES), 11)
+        self.assertEqual(len(MODULES), 13)
         self.assertEqual(normalize_module("autorole", {"enabled": True, "role_id": RID}, guild),
                          {"enabled": True, "role_id": RID})
         self.assertEqual(normalize_module("audit", {"enabled": True, "channel_id": CID}, guild)["channel_id"], CID)
@@ -81,6 +81,10 @@ class ModuleLogicTests(unittest.TestCase):
                                                       "category_id": CATID}, guild),
                          {"enabled": True, "panel_channel_id": CID, "category_id": CATID,
                           "staff_role_id": ""})
+        self.assertEqual(normalize_module("modmail", {"enabled": True, "staff_channel_id": CID}, guild),
+                         {"enabled": True, "staff_channel_id": CID, "staff_role_id": ""})
+        self.assertEqual(normalize_module("applications", {"enabled": True, "panel_channel_id": CID,
+                                                           "staff_channel_id": CID}, guild)["staff_channel_id"], CID)
         for name, config in [
             ("fake_module", {"enabled": True}),
             ("xp", {"enabled": "yes"}),
@@ -157,7 +161,7 @@ class ModuleHttpTests(unittest.IsolatedAsyncioTestCase):
         result = await self.client.get(f"/api/modules/{GID}")
         self.assertEqual(result.status, 200)
         data = await result.json()
-        self.assertEqual(len(data["modules"]), 11)
+        self.assertEqual(len(data["modules"]), 13)
         self.assertFalse(data["online"])
         self.assertEqual(data["settings"], {})
         self.assertEqual((await self.client.post(f"/api/modules/{GID}/xp", json={"enabled": True})).status, 403)
