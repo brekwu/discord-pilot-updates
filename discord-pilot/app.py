@@ -224,7 +224,7 @@ def decode_voice_audio(payload: bytes, mime_type: str):
     except Exception as exc:
         if isinstance(exc, ValueError):
             raise
-        raise ValueError("Le navigateur a envoyé un enregistrement audio incomplet ou illisible.") from exc
+        raise ValueError(f"Le navigateur a envoyé un enregistrement audio incomplet ou illisible ({type(exc).__name__}).") from exc
     seconds = len(samples) / 16000
     if seconds < 0.5 or seconds > MAX_VOICE_SECONDS:
         raise ValueError("La dictée doit durer de 0,5 seconde à 5 minutes.")
