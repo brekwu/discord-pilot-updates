@@ -88,6 +88,26 @@ class State:
         self.save()
         return count
 
+    def seed_invite_counts(self, guild_id: str, snapshot: dict) -> None:
+        """Start from Discord's visible invite uses, never reduce saved totals.
+
+        Deleted/expired links and vanity URLs cannot be reconstructed, so
+        this is a documented lower bound, not a fabricated historical total.
+        """
+        observed = {}
+        for uses, inviter_id in snapshot.values():
+            if inviter_id is not None:
+                key = str(inviter_id)
+                observed[key] = observed.get(key, 0) + max(0, int(uses))
+        counts = self.state["invite_counts"].setdefault(str(guild_id), {})
+        changed = False
+        for inviter_id, uses in observed.items():
+            if uses > int(counts.get(inviter_id, 0)):
+                counts[inviter_id] = uses
+                changed = True
+        if changed:
+            self.save()
+
 
 if sys.platform == "win32":
     from ctypes import wintypes
