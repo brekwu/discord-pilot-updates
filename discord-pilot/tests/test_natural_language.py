@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 from aiohttp.test_utils import TestClient, TestServer
 
 import app
-from planner import local_parse, missing_information, parse_ollama_decision
+from planner import (collapse_old_clarifications, default_creation_plan,
+                     local_parse, missing_information, parse_ollama_decision)
 from storage import State
 
 
@@ -23,10 +24,27 @@ class LocalLanguageTests(unittest.TestCase):
         self.assertEqual(local_parse("Rajoute un channel vocal Général dans la catégorie COMMUNAUTÉ"),
                          [{"type": "create_voice_channel", "name": "Général", "category": "COMMUNAUTÉ"}])
 
-    def test_incomplete_request_asks_instead_of_guessing(self):
+    def test_incomplete_request_has_safe_draft_defaults(self):
         self.assertIn("Quel nom", missing_information("Rajoute un channel"))
         self.assertIn("Quel nom", missing_information("Ajoute un canal dans la catégorie ACCUEIL"))
         self.assertIsNone(missing_information("Ajoute un salon annonces"))
+        self.assertEqual(default_creation_plan("Rajoute un channel"),
+                         [{"type": "create_text_channel", "name": "nouveau-salon"}])
+        self.assertEqual(default_creation_plan("Ajoute un canal dans la catégorie ACCUEIL"),
+                         [{"type": "create_text_channel", "name": "nouveau-salon", "category": "ACCUEIL"}])
+
+    def test_old_clarifications_are_ignored_when_request_is_clear(self):
+        prompt = "cree un salon bienvenu et au revoir\nPrécision : Bienvenue\nPrécision : au revoir"
+        clean = collapse_old_clarifications(prompt)
+        self.assertEqual(clean, "cree un salon bienvenu et au revoir")
+        self.assertEqual(local_parse(clean), [
+            {"type": "create_text_channel", "name": "bienvenu"},
+            {"type": "create_text_channel", "name": "au revoir"},
+        ])
+
+    def test_old_clarification_can_complete_incomplete_creation(self):
+        self.assertEqual(collapse_old_clarifications("Crée un salon\nPrécision : annonces"),
+                         "Crée un salon annonces")
 
     def test_local_model_can_ask_a_question(self):
         actions, question = parse_ollama_decision('{"actions":[],"question":"Quel salon veux-tu créer ?"}')
@@ -56,13 +74,38 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         app.STATE, app.PORT = self.original_state, self.original_port
         self.temp.cleanup()
 
-    async def test_ask_for_name_without_changing_discord(self):
+    async def test_incomplete_create_proposes_draft_without_questions(self):
         res = await self.client.post("/api/plan", json={"guild_id": "1567347687379050727",
                                                         "mode": "auto", "prompt": "Rajoute un channel"}, headers=self.headers)
         self.assertEqual(res.status, 200)
         body = await res.json()
-        self.assertTrue(body["needs_clarification"])
-        self.assertEqual(app.STATE.history("1567347687379050727"), [])
+        self.assertNotIn("needs_clarification", body)
+        self.assertEqual(body["plan"]["actions"], [{"type": "create_text_channel", "name": "nouveau-salon"}])
+        self.assertEqual(body["plan"]["status"], "draft")
+
+    async def test_screenshot_request_creates_two_channels_directly_with_model_available(self):
+        prompt = "cree un salon bienvenu et au revoir\nPrécision : Bienvenue\nPrécision : au revoir"
+        with patch.object(app, "ollama_models", new=AsyncMock(side_effect=AssertionError("not needed"))), \
+             patch.object(app, "ollama_plan", new=AsyncMock(side_effect=AssertionError("not needed"))):
+            res = await self.client.post("/api/plan", json={
+                "guild_id": "1567347687379050727", "mode": "auto", "prompt": prompt
+            }, headers=self.headers)
+        self.assertEqual(res.status, 200)
+        body = await res.json()
+        self.assertEqual(body["plan"]["actions"], [
+            {"type": "create_text_channel", "name": "bienvenu"},
+            {"type": "create_text_channel", "name": "au revoir"},
+        ])
+        self.assertEqual(body["plan"]["prompt"], "cree un salon bienvenu et au revoir")
+
+    async def test_ai_questions_cannot_loop_back_into_clarification_modals(self):
+        prompt = {"guild_id": "1567347687379050727", "mode": "ollama",
+                  "prompt": "Réorganise les conversations à ta convenance"}
+        with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
+             patch.object(app, "ollama_plan", new=AsyncMock(return_value=([], "Quel salon ?"))):
+            res = await self.client.post("/api/plan", json=prompt, headers=self.headers)
+        self.assertEqual(res.status, 400)
+        self.assertNotIn("needs_clarification", await res.text())
 
     async def test_local_explicit_request_creates_draft(self):
         res = await self.client.post("/api/plan", json={"guild_id": "1567347687379050727",
