@@ -103,9 +103,9 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Modules natifs locaux (v0.5.6)
+### Modules natifs locaux (v0.5.7)
 
-L'onglet **Modules actifs** contient dix modules **réellement développés**,
+L'onglet **Modules actifs** contient onze modules **réellement développés**,
 désactivés au départ et configurés séparément pour chaque serveur :
 
 1. Rôle attribué aux nouveaux membres.
@@ -118,6 +118,14 @@ désactivés au départ et configurés séparément pour chaque serveur :
 8. Création/suppression de salons vocaux temporaires depuis un salon d'entrée.
 9. Attribution et retrait d'un rôle par une réaction sur un message défini.
 10. Message quotidien à heure fixe, selon l'heure française.
+11. Tickets privés : panneau à bouton, un ticket ouvert par membre, salon réservé au demandeur et au rôle support sélectionné, fermeture et archivage sans suppression.
+
+L'onglet Modules dispose aussi de deux types d'événements ponctuels :
+
+- **Sondages** : 2 à 9 réponses, votes par réactions, durée de 1 minute à 7 jours et publication des résultats. Un utilisateur peut réagir à plusieurs réponses ; la version actuelle compte les réactions et n'impose pas un vote unique par personne.
+- **Giveaways** : lancement dans un salon choisi, participation via 🎉, tirage aléatoire parmi les comptes non-bots ayant réagi et annonce du gagnant. Ce tirage est un outil d'animation, sans gestion juridique de concours ni remise automatique de lots.
+
+Les événements arrivent à échéance uniquement lorsque Discord Pilot est en marche ; s'il était fermé à l'heure prévue, les résultats sont calculés à sa prochaine connexion, à condition que le message et ses réactions soient toujours accessibles. Les tickets ouverts restent visibles dans Discord même si le bot est arrêté, mais leurs boutons ne fonctionneront qu'à son redémarrage. Le bot doit pouvoir **Gérer les salons**, **Voir les salons**, **Envoyer des messages**, **Lire l'historique** et **Ajouter des réactions**. Le panneau et les événements sont publiés seulement après une confirmation dans l'interface.
 
 Les messages de bienvenue, départ et compteur d'invitation sont toujours
 disponibles. Une demande explicite **« Active l'XP »**, **« Active l'antispam »**
