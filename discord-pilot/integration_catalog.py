@@ -91,6 +91,13 @@ FEATURE_PROVIDERS = {
     **{n: "xenon" for n in (90,)},
 }
 
+# Only exact, already implemented native functions are marked available.
+# This is not an estimate of how many catalogue ideas are complete.
+FEATURE_NATIVE = {
+    11: "xp", 13: "xp", 14: "xp", 27: "antispam",
+    30: "wordfilter", 35: "audit",
+}
+
 
 def all_features() -> list[dict]:
     features = []
@@ -98,11 +105,13 @@ def all_features() -> list[dict]:
         for title in names:
             number = len(features) + 1
             provider_id = FEATURE_PROVIDERS.get(number)
+            native_module = FEATURE_NATIVE.get(number)
             features.append({
                 "id": f"feature-{number:03d}", "number": number, "title": title,
                 "category": category, "icon": icon,
                 "provider_id": provider_id,
-                "availability": "external" if provider_id else "planned",
+                "native_module": native_module,
+                "availability": "native" if native_module else "external" if provider_id else "planned",
             })
     return features
 
