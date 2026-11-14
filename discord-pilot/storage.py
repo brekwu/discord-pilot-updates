@@ -45,6 +45,9 @@ class State:
         self.state.setdefault("tickets", {})
         self.state.setdefault("ticket_panels", {})
         self.state.setdefault("interactive_events", {})
+        self.state.setdefault("applications", {})
+        self.state.setdefault("application_panels", {})
+        self.state.setdefault("modmail_conversations", {})
 
     def save(self):
         temporary = self.path.with_suffix(".tmp")
@@ -146,7 +149,11 @@ class State:
         records = self.state["interactive_events"].setdefault(str(guild_id), {})
         if len(records) >= 1000:
             raise ValueError("Limite de 1 000 événements par serveur : exporte et nettoie l'historique avant de continuer.")
-        event_id = uuid4().hex
+        event_id = row.get("id") or uuid4().hex
+        if (not isinstance(event_id, str) or len(event_id) != 32
+                or any(char not in "0123456789abcdef" for char in event_id)
+                or event_id in records):
+            raise ValueError("Identifiant d'événement invalide ou déjà utilisé.")
         records[event_id] = {"id": event_id, "guild_id": str(guild_id),
                              "status": "open", "announced": False, **row}
         self.save()
