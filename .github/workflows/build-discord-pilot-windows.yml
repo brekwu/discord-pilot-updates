@@ -205,6 +205,9 @@ jobs:
               try { & taskkill.exe /T /F /PID $listenerPid *> $null } catch {}
             }
             try { & taskkill.exe /T /F /PID $p.Id *> $null } catch {}
+            # The original PID has normally exited already after a successful
+            # update. Ignore taskkill's exit code without masking test errors.
+            $global:LASTEXITCODE = 0
           }
 
       - uses: actions/upload-artifact@v4
