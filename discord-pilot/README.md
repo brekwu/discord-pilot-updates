@@ -103,7 +103,42 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Catalogue de 90 fonctionnalités et intégrations externes (v0.5.4)
+### Modules natifs locaux (v0.5.5)
+
+L'onglet **Modules actifs** contient dix modules **réellement développés**,
+désactivés au départ et configurés séparément pour chaque serveur :
+
+1. Rôle attribué aux nouveaux membres.
+2. XP, niveaux et classement (10 XP par message, délai de 60 secondes entre gains).
+3. Anti-spam (6 messages en 8 secondes : suppression et pause de 60 secondes si la permission le permet).
+4. Blocage des liens envoyés par les non-modérateurs.
+5. Filtre de mots personnalisables (30 maximum).
+6. Journal des messages édités/supprimés (auteur, salon, ID ; **pas** le contenu du message).
+7. Réactions 👍 / 👎 automatiques dans un salon de suggestions.
+8. Création/suppression de salons vocaux temporaires depuis un salon d'entrée.
+9. Attribution et retrait d'un rôle par une réaction sur un message défini.
+10. Message quotidien à heure fixe, selon l'heure française.
+
+Les messages de bienvenue, départ et compteur d'invitation sont toujours
+disponibles. Une demande explicite **« Active l'XP »**, **« Active l'antispam »**
+ou **« Désactive l'antispam »** crée un plan validable depuis le studio.
+Les autres modules s'activent depuis le tableau de bord, car ils exigent un
+salon, un rôle, une réaction ou un texte précis.
+
+**Pré-requis :** les salons/permissions doivent exister, le rôle du bot doit
+être assez haut, et les événements ne se produisent que quand l'application
+est ouverte et le bot en ligne. **Server Members Intent** est nécessaire aux
+attributions à l'arrivée. **Message Content Intent** est nécessaire aux
+filtres de liens/mots ; ce sont des autorisations privilégiées à activer dans
+Discord Developer Portal > Bot. Le bot peut se connecter en mode limité si
+Discord les refuse ; la configuration enregistrée ne constitue pas la preuve
+qu'une intervention réelle a réussi.
+
+L'anti-spam est un seuil simple, **pas** une protection anti-raid complète.
+La réaction de rôle gère une association message/émoji/rôle par serveur pour
+l'instant. Un bot local hors ligne ne peut pas publier les annonces manquées.
+
+### Catalogue de 90 fonctionnalités et intégrations externes
 
 L'onglet **Intégrations** permet de rechercher 90 idées par catégorie, de filtrer
 les services externes et de préparer un lien vers le site officiel d'un éditeur.
@@ -122,9 +157,11 @@ externe ne reçoit le token de Discord Pilot. Un bot ne peut pas autoriser une
 autre application sur ton compte à ta place. L'ajout et la configuration
 restent dépendants des permissions et capacités du fournisseur.
 
-Le catalogue est donc **un parcours d'aide à l'installation**, pas 90 nouveaux
-modules autonomes fonctionnels. Les bots tiers hébergés séparément peuvent
-continuer leurs tâches lorsque Discord Pilot local est éteint.
+Le catalogue distingue désormais six entrées correspondant à des modules
+natifs, les fonctionnalités relevant de fournisseurs externes et les idées
+encore non implémentées. **Il ne s'agit pas de 90 fonctionnalités terminées.**
+Les bots tiers hébergés séparément peuvent continuer leurs tâches lorsque
+Discord Pilot local est éteint.
 
 Sépare plusieurs instructions distinctes par un **point-virgule**. Le moteur sans IA couvre une liste volontairement limitée d'opérations ; si une demande est trop complexe, il refuse au lieu d'exécuter une partie silencieusement.
 
@@ -158,7 +195,13 @@ sur Windows. Le ZIP source reste disponible pour diagnostic et développement.
 
 ### Limitations actuelles
 
-Cette version configure les serveurs et propose trois automatismes simples **tant que le bot local est en ligne** : arrivées, départs et invitations. Elle présente aussi des intégrations tierces **à autoriser séparément**. Elle ne programme pas encore les autres comportements permanents (tickets interactifs, onboarding avec boutons, flux réseaux, modération automatique, etc.), qui demandent une logique d'exécution persistante. Les modèles « Support » créent donc des salons de support, **pas un système complet de tickets interactifs**.
+Cette version configure les serveurs et exécute les dix modules locaux décrits
+ci-dessus, plus les arrivées, départs et invitations. La musique et les bots
+externes nécessitent toujours une autorisation distincte. Les **tickets privés
+interactifs**, les flux Twitch/TikTok/YouTube, les tournois automatisés, les
+jeux/music bots avec fournisseurs externes, l'anti-raid avancé et les autres
+idées du catalogue ne sont pas réalisés par le moteur natif. Les modèles
+« Support » créent des salons, **pas** un système de tickets interactifs complet.
 
 Cette application ne nécessite pas et ne lit pas le code de ton bot existant. Pour fusionner plus tard les systèmes persistants dans le même programme, il faudra récupérer le dépôt source de ton bot.
 
