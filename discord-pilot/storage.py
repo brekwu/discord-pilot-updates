@@ -38,6 +38,10 @@ class State:
         self.state.setdefault("aliases", {})
         self.state.setdefault("automations", {})
         self.state.setdefault("invite_counts", {})
+        self.state.setdefault("modules", {})
+        self.state.setdefault("xp_stats", {})
+        self.state.setdefault("daily_sent", {})
+        self.state.setdefault("voice_rooms", {})
 
     def save(self):
         temporary = self.path.with_suffix(".tmp")
@@ -107,6 +111,33 @@ class State:
                 changed = True
         if changed:
             self.save()
+
+    def module(self, guild_id: str, name: str) -> dict:
+        return self.state["modules"].get(str(guild_id), {}).get(name, {})
+
+    def set_module(self, guild_id: str, name: str, config: dict):
+        self.state["modules"].setdefault(str(guild_id), {})[name] = dict(config)
+        self.save()
+
+    def record_xp(self, guild_id: str, member_id: str, now: float) -> tuple[int, int, bool]:
+        from community_modules import level_for_xp
+        users = self.state["xp_stats"].setdefault(str(guild_id), {})
+        record = users.setdefault(str(member_id), {"xp": 0, "last_at": 0})
+        if now - float(record.get("last_at", 0)) < 60:
+            return int(record["xp"]), level_for_xp(int(record["xp"])), False
+        previous = level_for_xp(int(record["xp"]))
+        record["xp"] = int(record["xp"]) + 10
+        record["last_at"] = now
+        self.save()
+        current = level_for_xp(int(record["xp"]))
+        return int(record["xp"]), current, current > previous
+
+    def leaderboard(self, guild_id: str, limit: int = 20) -> list[dict]:
+        from community_modules import level_for_xp
+        records = self.state["xp_stats"].get(str(guild_id), {})
+        top = sorted(records.items(), key=lambda row: -int(row[1].get("xp", 0)))[:limit]
+        return [{"member_id": member_id, "xp": int(record.get("xp", 0)),
+                 "level": level_for_xp(int(record.get("xp", 0)))} for member_id, record in top]
 
 
 if sys.platform == "win32":
