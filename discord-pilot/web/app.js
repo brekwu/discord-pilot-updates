@@ -431,11 +431,12 @@ function renderModules() {
   const grid = $("moduleGrid");
   if (!data) {
     $("moduleStatus").textContent = "Sélectionne un serveur pour charger les modules.";
-    replace(grid, []); replace($("moduleLeaderboard"), []); return;
+    replace(grid, []); ["moduleLeaderboard", "inviteLeaderboard", "activityLeaderboard", "warningHistory"].forEach(id => replace($(id), []));
+    $("issueWarning").disabled = true; return;
   }
   const enabled = Object.values(data.settings).filter(row => row.enabled).length;
   const unavailable = [];
-  if (!data.members_intent) unavailable.push("Server Members Intent (rôle automatique, accueil/invitations)");
+  if (!data.members_intent) unavailable.push("Server Members Intent (rôle automatique, accueil/invitations, récompenses d'invitations)");
   if (!data.content_intent) unavailable.push("Message Content Intent (anti-liens, mots filtrés, Modmail)");
   $("moduleStatus").textContent = `${enabled} module(s) configuré(s) sur ce serveur. ${data.online ? "Bot connecté." : "Bot déconnecté : configuration impossible pour l'instant."} ${unavailable.length ? "Intents non disponibles : " + unavailable.join(" ; ") + ". Active-les dans Discord Developer Portal > Bot si besoin." : "Les intents requis sont connectés."} Les permissions Discord sont vérifiées lors des événements réels.`;
   replace(grid, data.modules.map(spec => {
@@ -459,8 +460,9 @@ function renderModules() {
         for (const item of rows) { const option = dom("option", "", item.name); option.value = item.id; input.append(option); }
       } else {
         input = dom("input", "module-input");
-        input.type = "text";
-        input.placeholder = ({words: "mot, expression, autre mot", hour: "08:30", snowflake: "123456789012345678", emoji: "✅", message: "Ton annonce…"})[kind] || "";
+        input.type = kind === "positive_int" ? "number" : "text";
+        if (kind === "positive_int") { input.min = "1"; input.max = "1000"; input.step = "1"; }
+        input.placeholder = ({words: "mot, expression, autre mot", hour: "08:30", snowflake: "123456789012345678", emoji: "✅", message: "Ton annonce…", positive_int: "10"})[kind] || "";
         input.maxLength = kind === "message" ? 1800 : kind === "words" ? 1400 : 100;
       }
       input.value = current[name] || ""; inputs[name] = input;
@@ -502,6 +504,32 @@ function renderModules() {
     r.append(dom("span", "", `#${index + 1}`), dom("strong", "", `Membre ${row.member_id}`),
              dom("span", "", `Niveau ${row.level} · ${row.xp} XP`)); return r;
   }) : [dom("p", "empty", "Aucun XP enregistré : active le module et attends des messages réels.")]);
+  const renderRanking = (element, rows, key, unit, empty) => replace($(element), rows.length ? rows.map((row, index) => {
+    const r = dom("div", "module-rank");
+    r.append(dom("span", "", `#${index + 1}`), dom("strong", "", `Membre ${row.member_id}`),
+             dom("span", "", `${row[key]} ${unit}`)); return r;
+  }) : [dom("p", "empty", empty)]);
+  renderRanking("inviteLeaderboard", data.invite_leaderboard || [], "invites", "invitation(s) identifiée(s)", "Aucune invitation attribuable enregistrée.");
+  renderRanking("activityLeaderboard", data.activity_leaderboard || [], "messages", "message(s)", "Aucun message comptabilisé.");
+  replace($("warningHistory"), (data.warnings || []).length ? data.warnings.map(row => {
+    const r = dom("div", "module-rank");
+    r.append(dom("span", "", `#${row.count}`), dom("strong", "", `Membre ${row.member_id}`),
+             dom("span", "", `${row.reason} · ${new Date(row.at).toLocaleString("fr-FR")}`)); return r;
+  }) : [dom("p", "empty", "Aucun avertissement enregistré.")]);
+  const warn = $("issueWarning");
+  warn.disabled = !data.online || !data.settings.warnings?.enabled;
+  warn.onclick = () => {
+    const guildId = data.guild_id;
+    modal({title: "Enregistrer un avertissement", description: "Le membre doit être présent sur ce serveur. Le motif sera publié dans le salon privé configuré. Aucune sanction n'est appliquée.",
+      fields: [{id: "member_id", label: "ID du membre", placeholder: "123456789012345678"},
+               {id: "reason", label: "Motif (2 à 300 caractères)", placeholder: "Expliquer la règle concernée"},
+               {id: "confirmed", type: "checkbox", label: "Je confirme l'enregistrement de cet avertissement", checked: false}],
+      confirmText: "Enregistrer", onConfirm: async values => {
+        if (!values.confirmed) throw new Error("Confirme l'enregistrement de l'avertissement.");
+        const result = await request(`/api/community/${guildId}/warn`, {data: {member_id: values.member_id.trim(), reason: values.reason.trim()}});
+        toast(result.note); await loadModules();
+      }});
+  };
 }
 
 async function loadInteractive() {
