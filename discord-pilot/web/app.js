@@ -1,10 +1,10 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], busy: false, updateAvailable: false };
+const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], catalog: {features: [], providers: {}}, busy: false, updateAvailable: false };
 // No personal server identifiers are shipped in public updates; Discord provides real names after login.
 const known = {};
-const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations" };
+const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations", suggest_integration: "Installer un bot externe (autorisation requise)" };
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -326,9 +326,9 @@ function renderHistory() {
   }));
 }
 
-function stateName(s) { return ({draft: "Brouillon", queued: "En attente", running: "En cours", completed: "Terminé", partial: "Partiellement terminé", failed: "Échec", done: "Réussi", skipped: "Déjà présent"})[s] || s; }
+function stateName(s) { return ({draft: "Brouillon", queued: "En attente", running: "En cours", completed: "Terminé", partial: "Partiellement terminé", failed: "Échec", done: "Réussi", skipped: "Déjà présent", authorization_required: "Autorisation Discord requise"})[s] || s; }
 function actionDescription(a) {
-  let text = `${actionNames[a.type] || a.type} · ${a.channel || a.name || ""}`;
+  let text = `${actionNames[a.type] || a.type} · ${a.type === "suggest_integration" ? app.catalog.providers[a.provider]?.name || a.provider : a.channel || a.name || ""}`;
   if (a.category) text += ` → ${a.category}`;
   if (a.new_name) text += ` → ${a.new_name}`;
   if (a.role) text += ` (rôle ${a.role})`;
@@ -342,19 +342,29 @@ function renderPlan() {
   if (!p) return;
   $("planTitle").textContent = `${p.actions.length} action${p.actions.length > 1 ? "s" : ""} à ${p.status === "draft" ? "valider" : "suivre"}`;
   const automation = p.actions.some(a => a.type.startsWith("configure_"));
-  $("planMeta").textContent = `Serveur : ${currentGuild()?.name || p.guild_id} · ${p.mode}` + (automation ? " · ⚠ Messages automatiques uniquement quand le bot local reste lancé. L'intent Server Members et la permission Gérer le serveur sont nécessaires pour le suivi des invitations." : "");
+  const external = p.actions.some(a => a.type === "suggest_integration");
+  $("planMeta").textContent = `Serveur : ${currentGuild()?.name || p.guild_id} · ${p.mode}` + (automation ? " · ⚠ Messages automatiques uniquement quand le bot local reste lancé. L'intent Server Members et la permission Gérer le serveur sont nécessaires pour le suivi des invitations." : "") + (external ? " · ⚠ L'installation d'un bot tiers nécessite ton autorisation Discord sur le site officiel : elle n'est jamais automatique." : "");
   $("planBadge").textContent = stateName(p.status);
   $("planBadge").className = `pill ${p.status === "completed" ? "success" : ["failed", "partial"].includes(p.status) ? "failed" : ""}`;
   replace($("planActions"), p.actions.map((a, i) => {
     const li = dom("li"); const num = dom("span", "step-num", i + 1);
     const words = dom("div", "step-text"); words.append(dom("strong", "", actionDescription(a)));
     const result = (p.results || []).find(r => r.index === i);
-    if (result) words.append(dom("small", "", result.detail));
+    if (result) {
+      words.append(dom("small", "", result.detail));
+      const providerUrl = app.catalog.providers[a.provider]?.url;
+      if (a.type === "suggest_integration" && result.status === "authorization_required" && result.authorization_url === providerUrl) {
+        const link = dom("a", "outline-button catalog-open", "↗ Autoriser sur le site officiel");
+        link.href = providerUrl; link.target = "_blank"; link.rel = "noopener noreferrer";
+        words.append(link);
+      }
+    }
     const marker = dom("span", `step-state ${result?.status || ""}`, result ? stateName(result.status) : a.type.startsWith("delete_") ? "Attention" : "À faire");
     li.append(num, words, marker); return li;
   }));
-  $("executeButton").disabled = p.status !== "draft" || !app.bootstrap?.online || !app.bootstrap.guilds.some(g => g.id === p.guild_id);
-  $("executeButton").textContent = p.status === "draft" ? "Appliquer sur Discord ↗" : stateName(p.status);
+  const onlyExternal = p.actions.every(a => a.type === "suggest_integration");
+  $("executeButton").disabled = p.status !== "draft" || (!onlyExternal && (!app.bootstrap?.online || !app.bootstrap.guilds.some(g => g.id === p.guild_id)));
+  $("executeButton").textContent = p.status === "draft" ? (onlyExternal ? "Préparer les liens officiels ↗" : "Appliquer sur Discord ↗") : stateName(p.status);
 }
 
 async function bootstrap(quiet = false) {
@@ -397,7 +407,64 @@ async function models() {
 function switchTab(key) {
   app.tab = key;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === key));
-  ["studio", "structure", "history"].forEach(k => $(`${k}Tab`).hidden = k !== key);
+  ["studio", "catalog", "structure", "history"].forEach(k => $(`${k}Tab`).hidden = k !== key);
+}
+
+async function loadCatalog() {
+  try {
+    app.catalog = await request("/api/catalog");
+    const categories = [...new Set(app.catalog.features.map(f => f.category))];
+    const allCategories = dom("option", "", "Toutes les catégories"); allCategories.value = "";
+    replace($("catalogCategory"), [allCategories, ...categories.map(name => {
+      const option = dom("option", "", name); option.value = name; return option;
+    })]);
+    renderCatalog(); renderPlan();
+  } catch (e) {
+    replace($("catalogGrid"), [dom("p", "empty", "Catalogue indisponible : " + e.message)]);
+  }
+}
+
+function renderCatalog() {
+  const query = $("catalogSearch").value.trim().toLocaleLowerCase("fr-FR");
+  const category = $("catalogCategory").value;
+  const onlyExternal = $("catalogExternalOnly").checked;
+  const features = app.catalog.features.filter(f => {
+    const provider = app.catalog.providers[f.provider_id];
+    return (!category || f.category === category) && (!onlyExternal || Boolean(provider)) &&
+      `${f.title} ${f.category} ${provider?.name || ""}`.toLocaleLowerCase("fr-FR").includes(query);
+  });
+  $("catalogCount").textContent = `${features.length} / ${app.catalog.features.length} FONCTIONNALITÉS`;
+  const cards = features.map(f => {
+    const provider = app.catalog.providers[f.provider_id];
+    const card = dom("article", "catalog-card");
+    const header = dom("div", "catalog-card-head");
+    header.append(dom("span", "catalog-icon", f.icon), dom("span", "catalog-number", `#${String(f.number).padStart(2, "0")}`));
+    card.append(header, dom("strong", "", f.title), dom("small", "catalog-category", f.category));
+    if (provider) {
+      card.append(dom("p", "catalog-provider", `Bot conseillé : ${provider.name}`));
+      const actions = dom("div", "catalog-actions");
+      const prepare = dom("button", "primary-button", "Préparer l'ajout");
+      prepare.onclick = () => prepareIntegration(f.provider_id);
+      const link = dom("a", "outline-button", "Site officiel ↗");
+      link.href = provider.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      actions.append(prepare, link); card.append(actions);
+    } else {
+      card.append(dom("p", "catalog-planned", "Idée à développer · aucune installation automatique disponible"));
+    }
+    return card;
+  });
+  replace($("catalogGrid"), cards.length ? cards : [dom("p", "empty", "Aucune fonctionnalité ne correspond à cette recherche.")]);
+}
+
+async function prepareIntegration(providerId) {
+  if (!app.selected) return toast("Sélectionne d'abord un serveur dans la colonne de gauche.", true);
+  try {
+    const data = await request("/api/integrations/plan", {data: {guild_id: app.selected, provider: providerId}});
+    app.plan = data.plan;
+    switchTab("studio"); renderPlan(); await loadHistory();
+    $("planPanel").scrollIntoView({behavior: "smooth", block: "center"});
+    toast("Plan prêt. L'installation nécessite ton autorisation sur le site officiel.");
+  } catch (e) { toast(e.message, true); }
 }
 
 function addServer() {
@@ -476,9 +543,10 @@ function renderPresets() {
 function executePlan() {
   const p = app.plan, g = currentGuild(); if (!p || !g) return;
   const destructive = p.actions.some(a => a.type.startsWith("delete_"));
-  modal({title: destructive ? "Confirmer les suppressions" : "Appliquer ce plan ?", description: `${p.actions.length} action(s) vont être réalisées sur ${g.name} (ID ${g.id}). Vérifie qu'il s'agit du bon serveur.${destructive ? " Certaines suppressions sont irréversibles." : ""}`,
-    fields: destructive ? [{id: "name", label: "Saisis exactement le nom Discord du serveur", placeholder: g.name}] : [{type: "info", text: "Discord Pilot exécutera le plan dans l'ordre et enregistrera le résultat de chaque étape."}],
-    confirmText: destructive ? "Confirmer la suppression" : "Exécuter maintenant", onConfirm: async ({name}) => {
+  const onlyExternal = p.actions.every(a => a.type === "suggest_integration");
+  modal({title: destructive ? "Confirmer les suppressions" : onlyExternal ? "Préparer les installations externes ?" : "Appliquer ce plan ?", description: `${p.actions.length} action(s) pour ${g.name} (ID ${g.id}). Vérifie qu'il s'agit du bon serveur.${destructive ? " Certaines suppressions sont irréversibles." : ""}`,
+    fields: destructive ? [{id: "name", label: "Saisis exactement le nom Discord du serveur", placeholder: g.name}] : [{type: "info", text: onlyExternal ? "Aucun bot externe ne sera installé maintenant. Discord Pilot affichera les liens officiels : il te faudra sélectionner le serveur et accepter les permissions dans Discord." : "Discord Pilot exécutera le plan dans l'ordre et enregistrera le résultat de chaque étape."}],
+    confirmText: destructive ? "Confirmer la suppression" : onlyExternal ? "Préparer les liens" : "Exécuter maintenant", onConfirm: async ({name}) => {
       await request(`/api/execute/${p.id}`, {data: {confirm_delete_name: name || ""}}); toast("Exécution démarrée. Les résultats s'affichent en direct."); await loadHistory();
     }});
 }
@@ -678,9 +746,12 @@ async function init() {
   $("modeSelect").onchange = () => $("modelSelect").hidden = !app.models.length || $("modeSelect").value === "local";
   $("inviteButton").onclick = async () => { try { const data = await request("/api/invite"); window.open(data.url, "_blank", "noopener,noreferrer"); } catch (e) { toast(e.message, true); } };
   $("exportHistory").onclick = () => { if (app.selected) window.location.href = `/api/export/${app.selected}`; };
+  $("catalogSearch").oninput = renderCatalog;
+  $("catalogCategory").onchange = renderCatalog;
+  $("catalogExternalOnly").onchange = renderCatalog;
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => switchTab(t.dataset.tab));
   document.querySelectorAll("[data-example]").forEach(t => t.onclick = () => { $("requestText").value = t.dataset.example; switchTab("studio"); $("requestText").focus(); });
-  await bootstrap(); renderPresets(); await models();
+  await bootstrap(); renderPresets(); await loadCatalog(); await models();
   backgroundUpdateCheck();
   setInterval(async () => {
     await bootstrap(true);

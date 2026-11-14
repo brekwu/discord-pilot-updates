@@ -19,3 +19,23 @@
 .voice-status{font-size:11px;line-height:1.6;color:#c5acd9;padding:0 22px 12px}
 @keyframes voicepulse{50%{opacity:.3}}
 @media(max-width:710px){.composer-actions{width:100%}.composer-actions .voice-button{min-width:116px}.composer-actions .primary-button{flex:1;min-width:0;width:auto}}
+
+/* External app directory: visible installation state, no implied auto-OAuth. */
+.catalog-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:18px 0 20px}
+.catalog-search{flex:1 1 260px;margin:0;min-width:185px}
+.catalog-filters select{border:1px solid #443454;border-radius:10px;background:#191627;color:#eee2fa;padding:12px 14px;max-width:230px;font-size:12px}
+.catalog-check{color:#cbbbd8;font-size:12px;display:flex;gap:7px;align-items:center}
+.catalog-check input{accent-color:#9f79f6}
+.catalog-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;margin:15px 0 23px}
+.catalog-card{display:flex;flex-direction:column;min-height:178px;border:1px solid #403352;border-radius:15px;background:linear-gradient(135deg,#221b32,#151424);padding:17px;gap:9px;color:#f7f1ff}
+.catalog-card-head{display:flex;justify-content:space-between;align-items:center}
+.catalog-icon{font-size:21px}.catalog-number{font-size:10px;color:#9788aa}
+.catalog-card strong{font-size:14px;line-height:1.45}
+.catalog-category{font-size:10px;color:#ae9fc4}
+.catalog-provider,.catalog-planned{font-size:11px;line-height:1.5;color:#c5bbdb;margin:3px 0 0}
+.catalog-planned{color:#a9a1b5;margin-top:auto}
+.catalog-actions{display:flex;gap:7px;margin-top:auto;flex-wrap:wrap}
+.catalog-actions .primary-button,.catalog-actions .outline-button{padding:9px 12px;font-size:10px;flex:1;min-width:85px;text-align:center;text-decoration:none;white-space:nowrap}
+.catalog-open{display:inline-block;margin-top:9px;padding:7px 10px!important;text-decoration:none;font-size:11px!important;width:max-content}
+.catalog-disclaimer{border:1px solid #57436b;background:#1a1727;color:#d1bfdf;border-radius:12px;padding:13px 17px;font-size:11px;line-height:1.75}
+@media(max-width:710px){.catalog-filters select{max-width:100%;flex:1}.catalog-grid{grid-template-columns:1fr}}

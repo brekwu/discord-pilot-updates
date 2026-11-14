@@ -52,7 +52,7 @@
             <div class="stat-card"><span>Demandes</span><strong id="statPlans">—</strong><small>Plans enregistrés</small><b class="stat-icon blue">▤</b></div>
           </div>
 
-          <div class="tabs" role="tablist"><button data-tab="studio" class="tab active">✦ Studio IA <span class="badge-new">LOCAL</span></button><button data-tab="structure" class="tab">▦ Structure du serveur</button><button data-tab="history" class="tab">◷ Historique</button></div>
+          <div class="tabs" role="tablist"><button data-tab="studio" class="tab active">✦ Studio IA <span class="badge-new">LOCAL</span></button><button data-tab="catalog" class="tab">✧ Intégrations <span class="badge-new">90 IDÉES</span></button><button data-tab="structure" class="tab">▦ Structure du serveur</button><button data-tab="history" class="tab">◷ Historique</button></div>
 
           <section id="studioTab" class="tab-panel">
             <div class="studio-header"><div><h3>Que veux-tu faire ?</h3><p>Décris les modifications de ton serveur comme tu le ferais à un assistant.</p></div><div class="assistant-badge">✦ <span>Assistant de configuration</span></div></div>
@@ -72,6 +72,16 @@
             <div class="examples"><button data-example="Crée une catégorie ACCUEIL avec les salons bienvenue, reglement et annonces">Créer une catégorie avec 3 salons <span>↗</span></button><button data-example="Crée les rôles Membre, Modérateur et VIP">Créer plusieurs rôles <span>↗</span></button><button data-example="Crée un salon vocal Général dans la catégorie COMMUNAUTÉ">Créer un salon vocal <span>↗</span></button></div>
           </section>
 
+          <section id="catalogTab" class="tab-panel" hidden>
+            <div class="section-heading"><div><h3>Catalogue d'intégrations</h3><p>90 fonctionnalités utiles. Les services externes nécessitent ton autorisation Discord ; les idées sans intégration ne sont pas présentées comme installées.</p></div><span id="catalogCount">CHARGEMENT…</span></div>
+            <div class="catalog-filters">
+              <label class="search-box catalog-search"><span>⌕</span><input id="catalogSearch" type="search" placeholder="Musique, tickets, anti-raid, Twitch…" autocomplete="off"></label>
+              <select id="catalogCategory" aria-label="Catégorie d'intégrations"><option value="">Toutes les catégories</option></select>
+              <label class="catalog-check"><input id="catalogExternalOnly" type="checkbox"> Services externes disponibles</label>
+            </div>
+            <div id="catalogGrid" class="catalog-grid"></div>
+            <p class="catalog-disclaimer">Discord Pilot prépare un plan ou ouvre le site officiel. Il ne peut pas installer un bot tiers à ta place : tu dois approuver les permissions Discord. Aucune installation n'est déclarée réussie sans vérification.</p>
+          </section>
           <section id="structureTab" class="tab-panel" hidden><div class="section-heading"><div><h3>Structure actuelle</h3><p>Salons, catégories et rôles tels que Discord les renvoie.</p></div><button class="outline-button" id="structureRefresh">↻ Synchroniser</button></div><div id="structureContent" class="structure-content"><p class="empty">Connecte ton bot pour consulter les salons.</p></div></section>
           <section id="historyTab" class="tab-panel" hidden><div class="section-heading"><div><h3>Historique des demandes</h3><p>Un journal indépendant pour chaque serveur.</p></div><button class="outline-button" id="exportHistory">↓ Exporter JSON</button></div><div id="historyContent" class="history-content"><p class="empty">Aucune demande pour le moment.</p></div></section>
 
