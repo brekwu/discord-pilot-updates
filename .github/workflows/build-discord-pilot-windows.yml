@@ -63,7 +63,7 @@ jobs:
             if ($page.StatusCode -ne 200 -or $asset.StatusCode -ne 200) { throw 'Interface locale incomplète.' }
             Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur HTTP, interface et JavaScript disponibles.'
           } finally {
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            try { & taskkill.exe /T /F /PID $p.Id *> $null } catch {}
           }
 
       - name: Tester le lancement avec le port 8765 occupe
@@ -72,8 +72,9 @@ jobs:
           $exe = Join-Path $PWD 'buildsrc/discord-pilot/dist/DiscordPilot.exe'
           $env:DISCORD_PILOT_NO_BROWSER = '1'
           $env:LOCALAPPDATA = Join-Path $PWD 'test-port-occupied-state'
+          $env:DISCORD_PILOT_PORT = '9215'
           New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
-          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 8765)
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9215)
           $listener.Start()
           $p = $null
           try {
@@ -82,15 +83,15 @@ jobs:
             for ($n = 0; $n -lt 60; $n++) {
               Start-Sleep -Seconds 2
               try {
-                $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8766/api/bootstrap' -TimeoutSec 2
+                $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
                 if ($data.version -eq '0.4.1' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
-            if (-not $ready) { throw 'Le port 8766 ne repond pas apres lancement.' }
-            Write-Host 'REGRESSION WINDOWS OK : port 8765 occupe, app fonctionnelle sur 8766.'
+            if (-not $ready) { throw 'Le port 9216 ne repond pas apres lancement.' }
+            Write-Host 'REGRESSION WINDOWS OK : port 9215 occupe, app fonctionnelle sur 9216.'
           } finally {
-            if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+            if ($p) { try { & taskkill.exe /T /F /PID $p.Id *> $null } catch {} }
             $listener.Stop()
           }
 
