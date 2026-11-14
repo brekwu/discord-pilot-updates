@@ -59,6 +59,52 @@ function buildVoiceBlob(chunks, mimeType) {
   return blob;
 }
 
+async function encodeVoiceWav(recording) {
+  // Decode only once recording has stopped. Unlike a ScriptProcessor callback,
+  // this works even when Opera throttles JavaScript in a background tab.
+  // The Windows EXE always accepts PCM WAV; it needn't ship an Opus decoder.
+  const AudioContextType = window.AudioContext || window.webkitAudioContext;
+  const OfflineContextType = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!AudioContextType || !OfflineContextType) {
+    throw new Error("Ton navigateur ne permet pas de décoder le vocal. Essaie Opera à jour.");
+  }
+  const context = new AudioContextType();
+  try {
+    const decoded = await context.decodeAudioData(await recording.arrayBuffer());
+    if (!decoded.duration || decoded.duration < 0.1) {
+      throw new Error("Enregistrement sans son : vérifie le microphone sélectionné dans Opera.");
+    }
+    if (decoded.duration > 305) {
+      throw new Error("Vocal trop long : limite de cinq minutes.");
+    }
+    const targetRate = 16000;
+    const sampleCount = Math.ceil(decoded.duration * targetRate);
+    const offline = new OfflineContextType(1, sampleCount, targetRate);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start(0);
+    const rendered = await offline.startRendering();
+    const samples = rendered.getChannelData(0);
+    const bytes = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(bytes);
+    function label(offset, value) {for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));}
+    label(0, "RIFF"); view.setUint32(4, bytes.byteLength - 8, true);
+    label(8, "WAVE"); label(12, "fmt "); view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, targetRate, true); view.setUint32(28, targetRate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    label(36, "data"); view.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) {
+      const value = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, Math.round(value * (value < 0 ? 32768 : 32767)), true);
+    }
+    return {blob: new Blob([bytes], {type: "audio/wav"}), seconds: samples.length / targetRate};
+  } finally {
+    await context.close();
+  }
+}
+
 async function beginVoiceRecording() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     throw new Error("Microphone non disponible dans ce navigateur. Vérifie les autorisations d'Opera.");
@@ -120,8 +166,13 @@ async function finishVoiceRecording() {
     if (voice.previewUrl) URL.revokeObjectURL(voice.previewUrl);
     voice.previewUrl = URL.createObjectURL(audio);
     const preview = $("voicePreview"); preview.src = voice.previewUrl; preview.hidden = false;
-    voiceStatus(`Enregistrement reçu : ${elapsed.toFixed(0)} s, ${Math.ceil(audio.size / 1024)} Ko. Transcription Whisper Small en cours… Au premier usage, téléchargement automatique d'environ 500 Mo.`);
-    const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": audio.type}, body: audio});
+    voiceStatus(`Enregistrement reçu : ${elapsed.toFixed(0)} s. Préparation du son complet pour la transcription…`);
+    const wav = await encodeVoiceWav(audio);
+    if (elapsed > 10 && wav.seconds < elapsed * 0.65) {
+      throw new Error(`Le navigateur n'a conservé que ${wav.seconds.toFixed(1)} s d'un vocal de ${elapsed.toFixed(0)} s. Réécoute-le ci-dessous et vérifie le microphone.`);
+    }
+    voiceStatus(`${wav.seconds.toFixed(1)} s de son complet reçu. Transcription Whisper Small en cours… Au premier usage, téléchargement automatique d'environ 500 Mo.`);
+    const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": "audio/wav"}, body: wav.blob});
     if (!result.text?.trim()) throw new Error("Aucune parole détectée. Essaie de parler plus près du micro.");
     const input = $("requestText");
     const joined = [input.value.trim(), result.text.trim()].filter(Boolean).join(" ");
