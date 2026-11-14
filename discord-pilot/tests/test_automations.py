@@ -151,6 +151,22 @@ class RuntimeAutomationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.STATE.state["invite_counts"], {})
         self.assertEqual(self.guild.channels[2].messages, [])
 
+    async def test_existing_ten_visible_invites_make_next_join_eleventh(self):
+        guild_id = str(self.guild.id)
+        app.STATE.set_automation(guild_id, "invites", "30")
+        inviter = SimpleNamespace(id=123456789012345678)
+        self.guild.invite_data = [SimpleNamespace(code="abc", uses=10, inviter=inviter)]
+        await self.bot.refresh_invites(self.guild, bootstrap=True)
+        self.assertEqual(app.STATE.state["invite_counts"][guild_id][str(inviter.id)], 10)
+        self.guild.invite_data = [SimpleNamespace(code="abc", uses=11, inviter=inviter)]
+        member = SimpleNamespace(id=987654321012345678, mention="<@987654321012345678>", guild=self.guild)
+        await self.bot.on_member_join(member)
+        self.assertEqual(app.STATE.state["invite_counts"][guild_id][str(inviter.id)], 11)
+        self.assertIn("onzième", self.guild.channels[2].messages[0][0])
+        # Restart must never reset a higher saved total when a link vanishes.
+        app.STATE.seed_invite_counts(guild_id, {"new": (1, inviter.id)})
+        self.assertEqual(app.STATE.state["invite_counts"][guild_id][str(inviter.id)], 11)
+
 
 class ApiAutomationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
