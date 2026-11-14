@@ -96,7 +96,8 @@ FEATURE_PROVIDERS = {
 FEATURE_NATIVE = {
     11: "xp", 13: "xp", 14: "xp", 27: "antispam",
     30: "wordfilter", 35: "audit", 55: "giveaway",
-    57: "poll", 83: "tickets",
+    56: "quiz", 57: "poll", 83: "tickets",
+    84: "modmail", 85: "applications",
 }
 
 

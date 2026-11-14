@@ -103,9 +103,9 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Modules natifs locaux (v0.5.7)
+### Modules natifs locaux (v0.5.8)
 
-L'onglet **Modules actifs** contient onze modules **réellement développés**,
+L'onglet **Modules actifs** contient treize modules **réellement développés**,
 désactivés au départ et configurés séparément pour chaque serveur :
 
 1. Rôle attribué aux nouveaux membres.
@@ -119,11 +119,14 @@ désactivés au départ et configurés séparément pour chaque serveur :
 9. Attribution et retrait d'un rôle par une réaction sur un message défini.
 10. Message quotidien à heure fixe, selon l'heure française.
 11. Tickets privés : panneau à bouton, un ticket ouvert par membre, salon réservé au demandeur et au rôle support sélectionné, fermeture et archivage sans suppression.
+12. Modmail : un membre écrit au bot en message privé ; le bot vérifie son appartenance au serveur puis relaie au salon du support **privé**. Le staff répond avec `!reply ID_UTILISATEUR message` dans ce salon, uniquement après un message entrant récent du membre (30 jours maximum). Avec plusieurs serveurs disponibles, le membre précise `!mail ID_SERVEUR son message`. 15 secondes minimum entre deux messages transmis. L'activation exige **Message Content Intent** pour lire les commandes du staff.
+13. Candidatures : publication d'un panneau à bouton, formulaire Discord avec pseudo, disponibilités et motivation, décision **Accepter/Refuser** réservée au rôle configuré ou aux gestionnaires de salons. Le candidat reçoit un MP seulement si ses paramètres de confidentialité l'autorisent. Le texte de candidature est envoyé au salon privé de validation, pas stocké dans l'historique local : seuls les statuts et identifiants sont conservés.
 
 L'onglet Modules dispose aussi de deux types d'événements ponctuels :
 
 - **Sondages** : 2 à 9 réponses, votes par réactions, durée de 1 minute à 7 jours et publication des résultats. Un utilisateur peut réagir à plusieurs réponses ; la version actuelle compte les réactions et n'impose pas un vote unique par personne.
 - **Giveaways** : lancement dans un salon choisi, participation via 🎉, tirage aléatoire parmi les comptes non-bots ayant réagi et annonce du gagnant. Ce tirage est un outil d'animation, sans gestion juridique de concours ni remise automatique de lots.
+- **Quiz** : 2 à 9 réponses sur des boutons Discord, une seule réponse par utilisateur, résultat et bonne réponse révélés à la fin. Aucune récompense automatique.
 
 Les événements arrivent à échéance uniquement lorsque Discord Pilot est en marche ; s'il était fermé à l'heure prévue, les résultats sont calculés à sa prochaine connexion, à condition que le message et ses réactions soient toujours accessibles. Les tickets ouverts restent visibles dans Discord même si le bot est arrêté, mais leurs boutons ne fonctionneront qu'à son redémarrage. Le bot doit pouvoir **Gérer les salons**, **Voir les salons**, **Envoyer des messages**, **Lire l'historique** et **Ajouter des réactions**. Le panneau et les événements sont publiés seulement après une confirmation dans l'interface.
 
@@ -165,7 +168,7 @@ externe ne reçoit le token de Discord Pilot. Un bot ne peut pas autoriser une
 autre application sur ton compte à ta place. L'ajout et la configuration
 restent dépendants des permissions et capacités du fournisseur.
 
-Le catalogue distingue désormais six entrées correspondant à des modules
+Le catalogue distingue désormais douze entrées correspondant à des fonctions
 natifs, les fonctionnalités relevant de fournisseurs externes et les idées
 encore non implémentées. **Il ne s'agit pas de 90 fonctionnalités terminées.**
 Les bots tiers hébergés séparément peuvent continuer leurs tâches lorsque

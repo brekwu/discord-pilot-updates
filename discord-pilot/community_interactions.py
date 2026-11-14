@@ -11,10 +11,12 @@ MAX_EVENT_MINUTES = 7 * 24 * 60
 
 
 def validate_event(kind: str, data: dict, guild) -> dict:
-    if kind not in {"poll", "giveaway"} or not isinstance(data, dict):
+    if kind not in {"poll", "giveaway", "quiz"} or not isinstance(data, dict):
         raise ValueError("Type d'événement inconnu.")
-    expected = {"channel_id", "minutes", "question", "options"} if kind == "poll" else {
+    expected = {"channel_id", "minutes", "question", "options"} if kind in {"poll", "quiz"} else {
         "channel_id", "minutes", "prize"}
+    if kind == "quiz":
+        expected.add("correct_index")
     if set(data) != expected:
         raise ValueError("Il manque un champ ou un paramètre inconnu est présent.")
     channel_id = data["channel_id"]
@@ -27,7 +29,7 @@ def validate_event(kind: str, data: dict, guild) -> dict:
     if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= MAX_EVENT_MINUTES:
         raise ValueError("Durée requise : 1 à 10 080 minutes (7 jours).")
     result = {"type": kind, "channel_id": channel_id, "minutes": minutes}
-    if kind == "poll":
+    if kind in {"poll", "quiz"}:
         question, options = data["question"], data["options"]
         if not isinstance(question, str) or not 3 <= len(question.strip()) <= 200:
             raise ValueError("Question requise : 3 à 200 caractères.")
@@ -38,6 +40,11 @@ def validate_event(kind: str, data: dict, guild) -> dict:
         if len(set(option.casefold() for option in answers)) != len(answers):
             raise ValueError("Les réponses doivent être différentes.")
         result.update(question=question.strip(), options=answers)
+        if kind == "quiz":
+            answer_index = data["correct_index"]
+            if isinstance(answer_index, bool) or not isinstance(answer_index, int) or not 0 <= answer_index < len(answers):
+                raise ValueError("Choisis l'index d'une réponse correcte (à partir de zéro).")
+            result["correct_index"] = answer_index
     else:
         prize = data["prize"]
         if not isinstance(prize, str) or not 2 <= len(prize.strip()) <= 200:

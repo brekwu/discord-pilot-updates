@@ -42,6 +42,13 @@ MODULES = {
                 "fields": [("panel_channel_id", "text", "Salon du panneau"),
                            ("category_id", "category", "Catégorie des tickets"),
                            ("staff_role_id", "optional_role", "Rôle du support (facultatif)")]},
+    "modmail": {"title": "Modmail privé par MP", "icon": "✉️", "description": "Transmet les messages privés au support et permet aux modérateurs de répondre avec !reply ID message. Nécessite Message Content Intent.",
+                "fields": [("staff_channel_id", "private_text", "Salon privé du support"),
+                           ("staff_role_id", "optional_role", "Rôle du support (facultatif)")], "requires": "content"},
+    "applications": {"title": "Candidatures interactives", "icon": "📝", "description": "Publie un formulaire Discord (pseudo, disponibilités, motivation), transmet au support et permet d'accepter ou refuser.",
+                     "fields": [("panel_channel_id", "text", "Salon public des candidatures"),
+                                ("staff_channel_id", "private_text", "Salon privé des candidatures"),
+                                ("staff_role_id", "optional_role", "Rôle de validation (facultatif)")]},
 }
 
 SNOWFLAKE = re.compile(r"^[0-9]{17,20}$")
@@ -69,7 +76,7 @@ def normalize_module(name: str, data: dict, guild) -> dict:
         value = value.strip()
         if not result["enabled"] and not value:
             continue
-        if kind in {"role", "optional_role", "text", "optional_text", "voice", "category", "snowflake"}:
+        if kind in {"role", "optional_role", "text", "private_text", "optional_text", "voice", "category", "snowflake"}:
             if not value and kind in {"optional_text", "optional_role"}:
                 result[key] = ""
                 continue
@@ -78,14 +85,14 @@ def normalize_module(name: str, data: dict, guild) -> dict:
             if kind in {"role", "optional_role"} and not any(str(role.id) == value and not role.is_default()
                                                             for role in guild.roles):
                 raise ValueError("Le rôle choisi n'existe pas sur ce serveur.")
-            if kind in {"text", "optional_text", "voice", "category"}:
+            if kind in {"text", "private_text", "optional_text", "voice", "category"}:
                 channel = guild.get_channel(int(value))
                 expected = "voice" if kind == "voice" else "category" if kind == "category" else "text"
                 if channel is None or str(getattr(channel, "type", "")) != expected:
                     raise ValueError("Choisis un salon du type attendu sur ce serveur.")
-                if name == "audit" and result["enabled"]:
+                if (name == "audit" or kind == "private_text") and result["enabled"]:
                     if channel.permissions_for(guild.default_role).view_channel:
-                        raise ValueError("Le salon des journaux doit être privé pour @everyone.")
+                        raise ValueError("Le salon des journaux ou du support doit être privé pour @everyone.")
             result[key] = value
         elif kind == "words":
             words = [word.strip().casefold() for word in value.split(",") if word.strip()]

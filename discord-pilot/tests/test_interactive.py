@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import app
 from community_interactions import poll_summary, validate_event
+from community_support import parse_dm_target, parse_staff_reply, staff_allowed, validate_application
 from storage import State
 
 
@@ -42,6 +43,9 @@ class FakeText:
         self.edit = AsyncMock()
         self.set_permissions = AsyncMock()
 
+    def permissions_for(self, role):
+        return SimpleNamespace(view_channel=False)
+
     async def send(self, content, **kwargs):
         self.sent.append((content, kwargs))
         return self.last_message
@@ -64,11 +68,13 @@ class FakeMember:
         self.id = int(user_id)
         self.mention = f"<@{user_id}>"
         self.roles = []
+        self.bot = False
         self.guild_permissions = SimpleNamespace(manage_channels=administrator)
 
 
 class FakeGuild:
     id = int(GID)
+    name = "Communauté test"
 
     def __init__(self):
         self.channel = FakeText()
@@ -89,6 +95,11 @@ class FakeGuild:
     def get_member(self, user_id):
         return self.opener if user_id == self.opener.id else None
 
+    async def fetch_member(self, user_id):
+        if user_id != self.opener.id:
+            raise discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Member not found")
+        return self.opener
+
     async def create_text_channel(self, name, **kwargs):
         self.last_overwrites = kwargs["overwrites"]
         return self.created
@@ -102,6 +113,9 @@ class InteractionValidationTests(unittest.TestCase):
             "options": ["Ascent", "Haven"]}, guild)["options"], ["Ascent", "Haven"])
         self.assertEqual(validate_event("giveaway", {
             "channel_id": TEXT, "minutes": 1, "prize": "Un skin"}, guild)["prize"], "Un skin")
+        self.assertEqual(validate_event("quiz", {
+            "channel_id": TEXT, "minutes": 15, "question": "La meilleure map ?",
+            "options": ["Ascent", "Haven"], "correct_index": 1}, guild)["correct_index"], 1)
         bad = [
             ("poll", {"channel_id": CATEGORY, "minutes": 10, "question": "Map ?", "options": ["A", "B"]}),
             ("poll", {"channel_id": TEXT, "minutes": 10, "question": "Map ?", "options": ["A", "a"]}),
@@ -109,6 +123,10 @@ class InteractionValidationTests(unittest.TestCase):
             ("poll", {"channel_id": TEXT, "minutes": True, "question": "Map ?", "options": ["A", "B"]}),
             ("giveaway", {"channel_id": TEXT, "minutes": 10081, "prize": "Lot"}),
             ("giveaway", {"channel_id": TEXT, "minutes": 1, "prize": "Lot", "script": "extra"}),
+            ("quiz", {"channel_id": TEXT, "minutes": 1, "question": "Une question ?",
+                      "options": ["A", "B"], "correct_index": True}),
+            ("quiz", {"channel_id": TEXT, "minutes": 1, "question": "Une question ?",
+                      "options": ["A", "B"], "correct_index": 2}),
         ]
         for kind, value in bad:
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -120,6 +138,22 @@ class InteractionValidationTests(unittest.TestCase):
         self.assertIn("Aucun vote", poll_summary("Map ?", ["Ascent", "Haven"], [0, 0]))
         with self.assertRaises(ValueError):
             poll_summary("Map ?", ["A", "B"], [1])
+
+    def test_support_inputs_and_staff_authorization(self):
+        self.assertEqual(parse_dm_target(f"!mail {GID} Bonjour"), (GID, "Bonjour"))
+        self.assertEqual(parse_dm_target("Bonjour"), (None, "Bonjour"))
+        self.assertEqual(parse_staff_reply(f"!reply <@{OWNER}> Réponse"), (OWNER, "Réponse"))
+        self.assertFalse(staff_allowed(FakeMember()))
+        self.assertTrue(staff_allowed(FakeMember(administrator=True)))
+        self.assertEqual(validate_application({"nickname": "Hugo", "availability": "Soir",
+                                               "motivation": "Une motivation assez longue"})["nickname"], "Hugo")
+        for value in ("!reply", f"!reply {OWNER}    ", "!reply 1 bonjour"):
+            with self.assertRaises(ValueError):
+                parse_staff_reply(value)
+        with self.assertRaises(ValueError):
+            parse_dm_target(f"!mail {GID}  ")
+        with self.assertRaises(ValueError):
+            validate_application({"nickname": "H", "availability": "Soir", "motivation": "Pourquoi pas"})
 
 
 class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -149,7 +183,8 @@ class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(type=discord.InteractionType.component,
                                guild=self.guild, channel=channel, channel_id=channel.id,
                                user=self.guild.opener, data={"custom_id": custom_id},
-                               response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+                               response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock(),
+                                                        send_modal=AsyncMock()),
                                followup=SimpleNamespace(send=AsyncMock()))
 
     async def test_persistent_button_opens_private_ticket_and_archives_without_deletion(self):
@@ -219,6 +254,99 @@ class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["result"]["votes"], [3, 1])
         self.assertIn("Haven", self.guild.channel.sent[0][0])
 
+    async def test_quiz_uses_one_answer_per_user_and_reveals_correct_at_end(self):
+        event_id = "a" * 32
+        event = app.STATE.add_interactive_event(GID, {
+            "type": "quiz", "id": event_id, "channel_id": TEXT,
+            "message_id": str(self.guild.channel.last_message.id),
+            "question": "La map ?", "options": ["Haven", "Ascent"],
+            "correct_index": 1, "answers": {}, "ends_at": int(time.time()) + 120})
+        interaction = self.interaction("open")
+        interaction.channel = self.guild.channel
+        interaction.channel_id = self.guild.channel.id
+        interaction.data = {"custom_id": f"pilot:quiz:answer:{GID}:{event_id}:1"}
+        await self.bot.on_interaction(interaction)
+        await self.bot.on_interaction(interaction)
+        self.assertEqual(event["answers"], {OWNER: 1})
+        self.assertEqual(interaction.response.send_message.await_count, 2)
+        event["ends_at"] = int(time.time()) - 1
+        await self.bot.finish_event(self.guild, event)
+        self.assertEqual(event["result"], {"votes": [0, 1], "participants": 1, "correct": 1})
+        self.assertIn("Ascent", self.guild.channel.sent[-1][0])
+
+    async def test_application_modal_panel_and_review(self):
+        app.STATE.set_module(GID, "applications", {"enabled": True, "panel_channel_id": TEXT,
+                                                       "staff_channel_id": str(self.guild.created.id),
+                                                       "staff_role_id": ""})
+        start = self.interaction("open")
+        start.data = {"custom_id": f"pilot:application:open:{GID}"}
+        await self.bot.on_interaction(start)
+        start.response.send_modal.assert_awaited_once()
+        modal = start.response.send_modal.await_args.args[0]
+        self.assertIsInstance(modal, app.ApplicationModal)
+        self.assertEqual(len(modal.children), 3)
+        candidate = self.interaction("open")
+        await self.bot.submit_application(candidate, {
+            "nickname": "Joueur", "availability": "Chaque vendredi soir",
+            "motivation": "Je veux vraiment rejoindre le support."})
+        records = app.STATE.state["applications"][GID]
+        self.assertEqual(len(records), 1)
+        rec_id = next(iter(records))
+        self.assertEqual(records[rec_id]["status"], "pending")
+        unauthorized = self.interaction("open")
+        unauthorized.channel = self.guild.created
+        unauthorized.channel_id = self.guild.created.id
+        unauthorized.user = FakeMember("723456789012345678")
+        unauthorized.data = {"custom_id": f"pilot:application:reject:{GID}:{rec_id}"}
+        await self.bot.on_interaction(unauthorized)
+        self.assertEqual(records[rec_id]["status"], "pending")
+        unauthorized.response.send_message.assert_awaited_once()
+        await self.bot.submit_application(candidate, {
+            "nickname": "Joueur", "availability": "Chaque vendredi soir",
+            "motivation": "Je veux vraiment rejoindre le support."})
+        self.assertEqual(len(records), 1)
+        self.assertEqual(len(self.guild.created.sent), 1)
+        reviewer = self.interaction("open")
+        reviewer.channel = self.guild.created
+        reviewer.channel_id = self.guild.created.id
+        reviewer.user = FakeMember("723456789012345678", administrator=True)
+        reviewer.data = {"custom_id": f"pilot:application:approve:{GID}:{rec_id}"}
+        user = SimpleNamespace(send=AsyncMock())
+        with patch.object(self.bot, "get_user", return_value=user):
+            await self.bot.on_interaction(reviewer)
+        self.assertEqual(records[rec_id]["status"], "approved")
+        user.send.assert_awaited_once()
+        await self.bot.on_interaction(reviewer)
+        self.assertEqual(user.send.await_count, 1)
+
+    async def test_modmail_requires_membership_and_protects_staff_reply(self):
+        app.STATE.set_module(GID, "modmail", {"enabled": True,
+                                               "staff_channel_id": str(self.guild.created.id),
+                                               "staff_role_id": ""})
+        dm_channel = FakeText("823456789012345678")
+        dm = SimpleNamespace(author=self.guild.opener, content="Bonjour, j'ai besoin d'aide.",
+                             channel=dm_channel, guild=None)
+        with patch.object(app.PilotBot, "guilds", new_callable=__import__("unittest.mock").mock.PropertyMock,
+                          return_value=[self.guild]):
+            await self.bot.handle_modmail_dm(dm)
+            await self.bot.handle_modmail_dm(dm)
+        self.assertEqual(len(self.guild.created.sent), 1)
+        self.assertEqual(len(dm_channel.sent), 2)
+        staff_message = SimpleNamespace(author=FakeMember("723456789012345678", administrator=True),
+                                        content=f"!reply {OWNER} Nous allons aider.",
+                                        channel=self.guild.created, guild=self.guild)
+        user = SimpleNamespace(send=AsyncMock())
+        with patch.object(self.bot, "get_user", return_value=user):
+            await self.bot.handle_modmail_staff(staff_message, app.STATE.module(GID, "modmail"))
+        user.send.assert_awaited_once()
+        stranger = SimpleNamespace(author=FakeMember("723456789012345678", administrator=True),
+                                   content="!reply 923456789012345678 Un message non demandé",
+                                   channel=self.guild.created, guild=self.guild)
+        with patch.object(self.bot, "get_user", return_value=user):
+            await self.bot.handle_modmail_staff(stranger, app.STATE.module(GID, "modmail"))
+        self.assertEqual(user.send.await_count, 1)
+        self.assertIn("Aucune conversation", self.guild.created.sent[-1][0])
+
 
 class InteractionHttpTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -268,6 +396,22 @@ class InteractionHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.STATE.state["ticket_panels"][GID]["channel_id"], TEXT)
             self.assertEqual(guild.channel.sent[-1][1]["view"].children[0].custom_id,
                              f"pilot:ticket:open:{GID}")
+            quiz = await self.client.post(f"/api/interactive/{GID}/quiz", json={
+                "channel_id": TEXT, "minutes": 2, "question": "Quel est ton rang ?",
+                "options": ["Gold", "Platinum", "Diamond"], "correct_index": 2}, headers=self.headers)
+            self.assertEqual(quiz.status, 200)
+            record = (await quiz.json())["event"]
+            self.assertEqual(record["type"], "quiz")
+            self.assertEqual(len(guild.channel.sent[-1][1]["view"].children), 3)
+            app.STATE.set_module(GID, "applications", {
+                "enabled": True, "panel_channel_id": TEXT,
+                "staff_channel_id": str(guild.created.id), "staff_role_id": ""})
+            form = await self.client.post(f"/api/interactive/{GID}/applications/panel",
+                                          json={}, headers=self.headers)
+            self.assertEqual(form.status, 200)
+            self.assertEqual(app.STATE.state["application_panels"][GID]["channel_id"], TEXT)
+            self.assertEqual(guild.channel.sent[-1][1]["view"].children[0].custom_id,
+                             f"pilot:application:open:{GID}")
 
 
 if __name__ == "__main__":

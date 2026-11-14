@@ -18,6 +18,7 @@ import time
 import urllib.error
 import webbrowser
 import wave
+from uuid import uuid4
 from zipfile import BadZipFile
 
 import aiohttp
@@ -28,6 +29,7 @@ from discord_ops import execute_action
 from community_interactions import OPTION_EMOJIS, poll_summary, utc_timestamp, validate_event
 from community_modules import (MODULES, SpamTracker, normalize_module,
                                paris_slot, public_modules, should_filter)
+from community_support import parse_dm_target, parse_staff_reply, staff_allowed, validate_application
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
                      collapse_old_clarifications, community_automation_plan,
@@ -98,6 +100,28 @@ def native_module_plan(prompt: str) -> list[dict]:
     return validate_actions([{"type": "set_module", "module": selected, "enabled": enabled}])
 
 
+class ApplicationModal(discord.ui.Modal):
+    """A short-lived Discord form. Submitted data is sent only to private staff."""
+
+    def __init__(self, bot, guild_id: str):
+        super().__init__(title="Candidature au serveur", timeout=300,
+                         custom_id=f"pilot:application:modal:{guild_id}")
+        self.bot = bot
+        self.nickname = discord.ui.TextInput(label="Pseudo", custom_id="nickname", min_length=2, max_length=70)
+        self.availability = discord.ui.TextInput(label="Disponibilités", custom_id="availability",
+                                                 min_length=2, max_length=240)
+        self.motivation = discord.ui.TextInput(label="Motivation", custom_id="motivation",
+                                               style=discord.TextStyle.paragraph, min_length=10, max_length=900)
+        self.add_item(self.nickname)
+        self.add_item(self.availability)
+        self.add_item(self.motivation)
+
+    async def on_submit(self, interaction):
+        await self.bot.submit_application(interaction, {
+            "nickname": str(self.nickname.value), "availability": str(self.availability.value),
+            "motivation": str(self.motivation.value)})
+
+
 class PilotBot(discord.Client):
     def __init__(self, manager, member_events=False, content_events=False):
         super().__init__(intents=discord.Intents(guilds=True, invites=True, members=member_events,
@@ -110,6 +134,9 @@ class PilotBot(discord.Client):
         self.daily_task: asyncio.Task | None = None
         self.ticket_locks: dict[int, asyncio.Lock] = {}
         self.event_locks: dict[str, asyncio.Lock] = {}
+        self.application_locks: dict[int, asyncio.Lock] = {}
+        self.modmail_last_at: dict[int, float] = {}
+        self.modmail_locks: dict[int, asyncio.Lock] = {}
 
     async def on_ready(self):
         self.manager.error = None
@@ -194,7 +221,19 @@ class PilotBot(discord.Client):
         if not isinstance(channel, discord.TextChannel):
             raise ValueError("Salon de l'événement introuvable.")
         if record["status"] == "open":
-            message = await channel.fetch_message(int(record["message_id"]))
+            if record["type"] == "quiz":
+                choices = record.get("answers", {})
+                counts = [sum(index == i for index in choices.values())
+                          for i in range(len(record["options"]))]
+                correct_index = record["correct_index"]
+                record["result"] = {"votes": counts, "participants": len(choices),
+                                    "correct": counts[correct_index]}
+                record["announcement"] = (
+                    f"🧠 **Quiz terminé : {record['question']}**\n"
+                    f"✅ Bonne réponse : **{record['options'][correct_index]}**\n"
+                    f"{counts[correct_index]} bonne(s) réponse(s) sur {len(choices)} participant(s).")
+            else:
+                message = await channel.fetch_message(int(record["message_id"]))
             if record["type"] == "poll":
                 counts = []
                 for emoji in OPTION_EMOJIS[:len(record["options"])]:
@@ -202,7 +241,7 @@ class PilotBot(discord.Client):
                     counts.append(max(0, reaction.count - (1 if reaction.me else 0)) if reaction else 0)
                 record["result"] = {"votes": counts}
                 record["announcement"] = poll_summary(record["question"], record["options"], counts)
-            else:
+            elif record["type"] == "giveaway":
                 reaction = next((r for r in message.reactions if str(r.emoji) == "🎉"), None)
                 participants = [user.id async for user in reaction.users(limit=None) if not user.bot] if reaction else []
                 winner = secrets.choice(participants) if participants else None
@@ -224,15 +263,51 @@ class PilotBot(discord.Client):
             return
         data = interaction.data if isinstance(interaction.data, dict) else {}
         custom = data.get("custom_id", "")
-        if not isinstance(custom, str) or not re.fullmatch(r"pilot:ticket:(?:open|close):\d{17,20}(?::\d{17,20})?", custom):
+        if not isinstance(custom, str):
             return
-        _, _, mode, guild_id, *args = custom.split(":")
-        if guild_id != str(interaction.guild.id):
+        gid = str(interaction.guild.id)
+        if re.fullmatch(r"pilot:ticket:(?:open|close):\d{17,20}(?::\d{17,20})?", custom):
+            _, _, mode, guild_id, *args = custom.split(":")
+            if guild_id != gid:
+                return
+            if mode == "open" and not args:
+                await self.open_ticket(interaction)
+            elif mode == "close" and len(args) == 1 and args[0] == str(interaction.channel_id):
+                await self.close_ticket(interaction)
             return
-        if mode == "open" and not args:
-            await self.open_ticket(interaction)
-        elif mode == "close" and len(args) == 1 and args[0] == str(interaction.channel_id):
-            await self.close_ticket(interaction)
+        if custom == f"pilot:application:open:{gid}":
+            if STATE.module(gid, "applications").get("enabled"):
+                await interaction.response.send_modal(ApplicationModal(self, gid))
+            else:
+                await interaction.response.send_message("Les candidatures sont fermées.", ephemeral=True)
+            return
+        application = re.fullmatch(r"pilot:application:(approve|reject):(\d{17,20}):([a-f0-9]{32})", custom)
+        if application and application.group(2) == gid:
+            await self.review_application(interaction, application.group(3), application.group(1))
+            return
+        quiz = re.fullmatch(r"pilot:quiz:answer:(\d{17,20}):([a-f0-9]{32}):([0-8])", custom)
+        if quiz and quiz.group(1) == gid:
+            await self.answer_quiz(interaction, quiz.group(2), int(quiz.group(3)))
+
+    async def answer_quiz(self, interaction, event_id: str, index: int):
+        record = STATE.state["interactive_events"].get(str(interaction.guild.id), {}).get(event_id)
+        if (not record or record.get("type") != "quiz" or record.get("status") != "open"
+                or int(record["channel_id"]) != interaction.channel_id or
+                not 0 <= index < len(record["options"])):
+            await interaction.response.send_message("Ce quiz n'est pas disponible.", ephemeral=True)
+            return
+        async with self.event_locks.setdefault(event_id, asyncio.Lock()):
+            if record.get("status") != "open" or time.time() >= record["ends_at"]:
+                await interaction.response.send_message("Le quiz est terminé.", ephemeral=True)
+                return
+            answers = record.setdefault("answers", {})
+            uid = str(interaction.user.id)
+            if uid in answers:
+                await interaction.response.send_message("Tu as déjà répondu à ce quiz.", ephemeral=True)
+                return
+            answers[uid] = index
+            STATE.save()
+        await interaction.response.send_message("✅ Réponse enregistrée. Le résultat sera dévoilé à la fin.", ephemeral=True)
 
     async def open_ticket(self, interaction):
         guild = interaction.guild
@@ -317,10 +392,180 @@ class PilotBot(discord.Client):
         except (discord.Forbidden, discord.HTTPException):
             await interaction.followup.send("Fermeture impossible : vérifie les permissions du bot.", ephemeral=True)
 
+    async def submit_application(self, interaction, values: dict):
+        gid = str(interaction.guild.id)
+        cfg = STATE.module(gid, "applications")
+        if not cfg.get("enabled"):
+            await interaction.response.send_message("Les candidatures sont fermées.", ephemeral=True)
+            return
+        try:
+            answers = validate_application(values)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        channel = interaction.guild.get_channel(int(cfg["staff_channel_id"]))
+        if (not isinstance(channel, discord.TextChannel) or
+                channel.permissions_for(interaction.guild.default_role).view_channel):
+            await interaction.response.send_message("Le salon des candidatures doit être privé. Préviens le staff.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with self.application_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            applications = STATE.state["applications"].setdefault(gid, {})
+            if any(row.get("user_id") == str(interaction.user.id) and row.get("status") == "pending"
+                   for row in applications.values()):
+                await interaction.followup.send("Tu as déjà une candidature en attente.", ephemeral=True)
+                return
+            application_id = uuid4().hex
+            view = discord.ui.View(timeout=None)
+            for action, label, style in (("approve", "Accepter", discord.ButtonStyle.success),
+                                          ("reject", "Refuser", discord.ButtonStyle.danger)):
+                view.add_item(discord.ui.Button(label=label, style=style,
+                                                custom_id=f"pilot:application:{action}:{gid}:{application_id}"))
+            fields = "\n".join(f"**{label} :** {discord.utils.escape_markdown(answers[key])}"
+                               for key, label in (("nickname", "Pseudo"),
+                                                  ("availability", "Disponibilités"),
+                                                  ("motivation", "Motivation")))
+            try:
+                posted = await channel.send(
+                    f"📝 **Nouvelle candidature** de <@{interaction.user.id}>\n{fields}",
+                    view=view, allowed_mentions=discord.AllowedMentions.none())
+            except (discord.Forbidden, discord.HTTPException):
+                await interaction.followup.send("Le support ne peut pas recevoir la candidature. Préviens un modérateur.", ephemeral=True)
+                return
+            applications[application_id] = {"id": application_id, "user_id": str(interaction.user.id),
+                                            "created_at": utc_timestamp(), "status": "pending",
+                                            "message_id": str(posted.id)}
+            STATE.save()
+        await interaction.followup.send("Candidature envoyée au support. Tu recevras la décision en message privé si tes MP sont ouverts.",
+                                        ephemeral=True)
+
+    async def review_application(self, interaction, application_id: str, decision: str):
+        gid = str(interaction.guild.id)
+        cfg = STATE.module(gid, "applications")
+        applications = STATE.state["applications"].get(gid, {})
+        record = applications.get(application_id)
+        if (not cfg.get("enabled") or not record or
+                str(interaction.channel_id) != cfg.get("staff_channel_id")):
+            await interaction.response.send_message("Cette candidature n'est pas accessible ici.", ephemeral=True)
+            return
+        if not staff_allowed(interaction.user, cfg.get("staff_role_id", "")):
+            await interaction.response.send_message("Tu n'as pas les droits de décision.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with self.application_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            if record.get("status") != "pending":
+                await interaction.followup.send("Cette candidature a déjà reçu une décision.", ephemeral=True)
+                return
+            record["status"] = "approved" if decision == "approve" else "rejected"
+            record["reviewed_by"] = str(interaction.user.id)
+            record["reviewed_at"] = utc_timestamp()
+            STATE.save()
+        label = "acceptée" if decision == "approve" else "refusée"
+        delivered = False
+        try:
+            user = self.get_user(int(record["user_id"])) or await self.fetch_user(int(record["user_id"]))
+            await user.send(f"📝 Ta candidature sur **{discord.utils.escape_markdown(interaction.guild.name)}** a été {label}.",
+                            allowed_mentions=discord.AllowedMentions.none())
+            delivered = True
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await interaction.followup.send(f"Décision enregistrée : candidature {label}. " +
+                                        ("MP envoyé au candidat." if delivered else "MP non délivré : messages privés indisponibles."),
+                                        ephemeral=True)
+
+    async def modmail_guild_access(self, guild, user_id: int) -> bool:
+        if guild.get_member(user_id):
+            return True
+        try:
+            await guild.fetch_member(user_id)
+            return True
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return False
+
+    async def handle_modmail_dm(self, message):
+        try:
+            target_id, content = parse_dm_target(message.content)
+        except ValueError as exc:
+            await message.channel.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            return
+        enabled = [guild for guild in self.guilds if STATE.module(str(guild.id), "modmail").get("enabled")]
+        if target_id:
+            enabled = [guild for guild in enabled if str(guild.id) == target_id]
+        available = [guild for guild in enabled if await self.modmail_guild_access(guild, message.author.id)]
+        if len(available) != 1:
+            if not available:
+                reply = "Aucun serveur avec Modmail activé n'est accessible pour ce compte."
+            else:
+                servers = "\n".join(f"• {discord.utils.escape_markdown(guild.name)} : `{guild.id}`"
+                                    for guild in available[:12])
+                reply = "Choisis ton serveur : `!mail ID_SERVEUR ton message`\n" + servers
+            await message.channel.send(reply, allowed_mentions=discord.AllowedMentions.none())
+            return
+        guild = available[0]
+        cfg = STATE.module(str(guild.id), "modmail")
+        channel = guild.get_channel(int(cfg["staff_channel_id"]))
+        if (not isinstance(channel, discord.TextChannel) or
+                channel.permissions_for(guild.default_role).view_channel):
+            await message.channel.send("Le support de ce serveur est indisponible pour le moment.")
+            return
+        async with self.modmail_locks.setdefault(message.author.id, asyncio.Lock()):
+            now = time.monotonic()
+            if now - self.modmail_last_at.get(message.author.id, -9999) < 15:
+                await message.channel.send("Patiente 15 secondes entre deux messages de support.")
+                return
+            try:
+                await channel.send(
+                    f"✉️ **Modmail — {discord.utils.escape_markdown(guild.name)}**\n"
+                    f"De **{discord.utils.escape_markdown(str(message.author))}** (ID `{message.author.id}`) :\n"
+                    f"{discord.utils.escape_markdown(content)}\n"
+                    f"Répondre avec `!reply {message.author.id} votre message`.",
+                    allowed_mentions=discord.AllowedMentions.none())
+                self.modmail_last_at[message.author.id] = now
+                conversation = STATE.state["modmail_conversations"].setdefault(str(guild.id), {})
+                conversation[str(message.author.id)] = time.time()
+                STATE.save()
+                await message.channel.send("✉️ Ton message a été transmis au support.",
+                                           allowed_mentions=discord.AllowedMentions.none())
+            except (discord.Forbidden, discord.HTTPException):
+                await message.channel.send("Impossible d'envoyer le message au support actuellement.")
+
+    async def handle_modmail_staff(self, message, cfg):
+        if message.channel.permissions_for(message.guild.default_role).view_channel:
+            await message.channel.send("Le support doit être dans un salon privé pour répondre.")
+            return
+        if not staff_allowed(message.author, cfg.get("staff_role_id", "")):
+            await message.channel.send("Commande réservée au support autorisé.")
+            return
+        try:
+            user_id, content = parse_staff_reply(message.content)
+        except ValueError as exc:
+            await message.channel.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            return
+        last_contact = STATE.state["modmail_conversations"].get(str(message.guild.id), {}).get(user_id)
+        if not isinstance(last_contact, (int, float)) or time.time() - last_contact > 30 * 86400:
+            await message.channel.send("Aucune conversation Modmail récente pour cet utilisateur. Il doit écrire au bot d'abord.")
+            return
+        try:
+            user = self.get_user(int(user_id)) or await self.fetch_user(int(user_id))
+            await user.send(f"✉️ **Réponse du support {discord.utils.escape_markdown(message.guild.name)} :**\n"
+                            f"{discord.utils.escape_markdown(content)}",
+                            allowed_mentions=discord.AllowedMentions.none())
+            await message.channel.send("✅ Réponse transmise en MP.")
+        except (discord.Forbidden, discord.HTTPException):
+            await message.channel.send("❌ Envoi impossible : l'utilisateur n'accepte pas les MP du bot.")
+
     async def on_message(self, message):
-        if message.guild is None or message.author.bot:
+        if message.author.bot:
+            return
+        if message.guild is None:
+            await self.handle_modmail_dm(message)
             return
         gid, uid = str(message.guild.id), str(message.author.id)
+        modmail = STATE.module(gid, "modmail")
+        if (modmail.get("enabled") and modmail.get("staff_channel_id") == str(message.channel.id)
+                and message.content.startswith("!reply")):
+            await self.handle_modmail_staff(message, modmail)
+            return
         moderator = bool(getattr(message.author.guild_permissions, "manage_messages", False))
         if not moderator and STATE.module(gid, "antispam").get("enabled"):
             if self.spam_tracker.flag(message.guild.id, message.author.id):
@@ -538,7 +783,7 @@ class BotManager:
         member = member or any(settings.get("autorole", {}).get("enabled")
                                for settings in modules.values())
         content = any(settings.get(name, {}).get("enabled")
-                      for settings in modules.values() for name in ("antilinks", "wordfilter"))
+                      for settings in modules.values() for name in ("antilinks", "wordfilter", "modmail"))
         return bool(member), bool(content)
 
     async def connect(self, token: str, remember: bool, member_events: bool | None = None,
@@ -922,6 +1167,8 @@ async def api_interactive(request):
         "events": list(STATE.state["interactive_events"].get(guild_id, {}).values())[-50:],
         "tickets": list(STATE.state["tickets"].get(guild_id, {}).values()),
         "ticket_panel": STATE.state["ticket_panels"].get(guild_id),
+        "applications": list(STATE.state["applications"].get(guild_id, {}).values())[-50:],
+        "application_panel": STATE.state["application_panels"].get(guild_id),
     })
 
 
@@ -949,6 +1196,34 @@ async def api_ticket_panel(request):
     return web.json_response({"ok": True, "panel": STATE.state["ticket_panels"][guild_id]})
 
 
+async def api_application_panel(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if not guild:
+        raise ValueError("Connecte le bot au serveur avant de publier un formulaire.")
+    cfg = STATE.module(guild_id, "applications")
+    if not cfg.get("enabled"):
+        raise ValueError("Active le module Candidatures et configure ses salons avant de publier.")
+    channel = guild.get_channel(int(cfg["panel_channel_id"]))
+    review_channel = guild.get_channel(int(cfg["staff_channel_id"]))
+    if (not isinstance(channel, discord.TextChannel) or
+            not isinstance(review_channel, discord.TextChannel) or
+            review_channel.permissions_for(guild.default_role).view_channel):
+        raise ValueError("Vérifie le salon public et le salon privé de validation.")
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="Déposer ma candidature", style=discord.ButtonStyle.primary,
+                                    custom_id=f"pilot:application:open:{guild_id}", emoji="📝"))
+    try:
+        message = await channel.send("📝 **Candidatures ouvertes** — clique sur le bouton pour remplir le formulaire.",
+                                     view=view, allowed_mentions=discord.AllowedMentions.none())
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise ValueError(f"Publication impossible : {type(exc).__name__}.") from exc
+    STATE.state["application_panels"][guild_id] = {"channel_id": str(channel.id),
+                                                   "message_id": str(message.id)}
+    STATE.save()
+    return web.json_response({"ok": True, "panel": STATE.state["application_panels"][guild_id]})
+
+
 async def api_interactive_create(request):
     guild_id = require_id(request.match_info["guild_id"])
     guild = MANAGER.get_guild(guild_id)
@@ -959,6 +1234,22 @@ async def api_interactive_create(request):
     valid = validate_event(kind, data, guild)
     channel = guild.get_channel(int(valid["channel_id"]))
     end_at = int(time.time() + valid["minutes"] * 60)
+    if kind == "quiz":
+        event_id = uuid4().hex
+        buttons = discord.ui.View(timeout=None)
+        for i, answer in enumerate(valid["options"]):
+            buttons.add_item(discord.ui.Button(label=answer[:80], style=discord.ButtonStyle.secondary,
+                                                custom_id=f"pilot:quiz:answer:{guild_id}:{event_id}:{i}"))
+        msg = (f"🧠 **Quiz : {valid['question']}**\n"
+               f"Choisis UNE réponse avec les boutons ci-dessous. Fin : <t:{end_at}:R>.")
+        try:
+            posted = await channel.send(msg, view=buttons, allowed_mentions=discord.AllowedMentions.none())
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            raise ValueError(f"Publication du quiz impossible : {type(exc).__name__}.") from exc
+        record = STATE.add_interactive_event(guild_id, {**valid, "id": event_id, "answers": {},
+                                                         "message_id": str(posted.id),
+                                                         "ends_at": end_at, "created_at": utc_timestamp()})
+        return web.json_response({"ok": True, "event": record})
     if kind == "poll":
         lines = [f"{OPTION_EMOJIS[i]} {answer}" for i, answer in enumerate(valid["options"])]
         msg = (f"📊 **{valid['question']}**\n" + "\n".join(lines)
@@ -1337,6 +1628,7 @@ def build_app():
     app.router.add_post("/api/modules/{guild_id}/{module}", api_module_update)
     app.router.add_get("/api/interactive/{guild_id}", api_interactive)
     app.router.add_post("/api/interactive/{guild_id}/tickets/panel", api_ticket_panel)
+    app.router.add_post("/api/interactive/{guild_id}/applications/panel", api_application_panel)
     app.router.add_post("/api/interactive/{guild_id}/{kind}", api_interactive_create)
     app.router.add_get("/api/export/{guild_id}", api_export)
     app.router.add_get("/api/models", api_models)
