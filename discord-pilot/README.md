@@ -103,6 +103,29 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
+### Catalogue de 90 fonctionnalités et intégrations externes (v0.5.4)
+
+L'onglet **Intégrations** permet de rechercher 90 idées par catégorie, de filtrer
+les services externes et de préparer un lien vers le site officiel d'un éditeur.
+Il répertorie notamment Jockie Music, Lyx, Wick, Carl-bot, Streamcord, sesh,
+Ticket Tool, Xenon et Statbot. Les entrées sans intégration tierce vérifiée
+sont explicitement indiquées **« Idée à développer »** : aucun bouton ne laisse
+entendre qu'elles sont installées.
+
+Tu peux aussi dicter ou taper « Mets de la musique », « Ajoute un système de
+tickets et de sécurité anti-raid » ou « Installe un bot pour Twitch » : l'assistant
+propose un **brouillon** d'intégration. Après validation, le résultat reste
+**« Autorisation Discord requise »**, jamais « Terminé », tant que tu n'as pas
+personnellement autorisé l'application tierce auprès de Discord. Les liens
+pointent vers une liste fermée de domaines officiels, et aucune application
+externe ne reçoit le token de Discord Pilot. Un bot ne peut pas autoriser une
+autre application sur ton compte à ta place. L'ajout et la configuration
+restent dépendants des permissions et capacités du fournisseur.
+
+Le catalogue est donc **un parcours d'aide à l'installation**, pas 90 nouveaux
+modules autonomes fonctionnels. Les bots tiers hébergés séparément peuvent
+continuer leurs tâches lorsque Discord Pilot local est éteint.
+
 Sépare plusieurs instructions distinctes par un **point-virgule**. Le moteur sans IA couvre une liste volontairement limitée d'opérations ; si une demande est trop complexe, il refuse au lieu d'exécuter une partie silencieusement.
 
 ### Demandes plus libres : IA locale gratuite
@@ -135,7 +158,7 @@ sur Windows. Le ZIP source reste disponible pour diagnostic et développement.
 
 ### Limitations actuelles
 
-Cette version configure les serveurs et propose trois automatismes simples **tant que le bot local est en ligne** : arrivées, départs et invitations. Elle ne programme pas encore les autres comportements permanents (tickets interactifs, onboarding avec boutons, flux réseaux, modération automatique, etc.), qui demandent une logique d'exécution persistante. Les modèles « Support » créent donc des salons de support, **pas un système complet de tickets interactifs**.
+Cette version configure les serveurs et propose trois automatismes simples **tant que le bot local est en ligne** : arrivées, départs et invitations. Elle présente aussi des intégrations tierces **à autoriser séparément**. Elle ne programme pas encore les autres comportements permanents (tickets interactifs, onboarding avec boutons, flux réseaux, modération automatique, etc.), qui demandent une logique d'exécution persistante. Les modèles « Support » créent donc des salons de support, **pas un système complet de tickets interactifs**.
 
 Cette application ne nécessite pas et ne lit pas le code de ton bot existant. Pour fusionner plus tard les systèmes persistants dans le même programme, il faudra récupérer le dépôt source de ton bot.
 
