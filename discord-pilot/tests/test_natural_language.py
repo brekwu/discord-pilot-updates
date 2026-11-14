@@ -99,6 +99,26 @@ class LocalLanguageTests(unittest.TestCase):
         actions, _ = parse_ollama_decision('<think>reasoning hidden</think>{"action":"creer_salon","name":"annonces"}')
         self.assertEqual(actions, [{"type": "create_text_channel", "name": "annonces"}])
 
+    def test_model_plan_wrappers_and_single_action_are_supported_safely(self):
+        for payload in (
+            '{"plan":[{"type":"create_text_channel","name":"annonces"}]}',
+            '{"commands":[{"action":"create_channel","name":"annonces"}]}',
+            '{"actions":{"type":"create_text_channel","name":"annonces"}}',
+            '{"result":{"actions":[{"type":"create_text_channel","name":"annonces"}]}}',
+        ):
+            with self.subTest(payload=payload):
+                actions, question = parse_ollama_decision(payload)
+                self.assertIsNone(question)
+                self.assertEqual(actions, [{"type": "create_text_channel", "name": "annonces"}])
+        for payload in (
+            '{"plan":[{"type":"run_shell","cmd":"powershell"}]}',
+            '{"actions":[{"type":"create_role","name":"Admin","permissions":"administrator"}]}',
+            '{"actions":[{"type":"create_text_channel","name":"annonces"}],'
+            '"plan":[{"type":"delete_channel","name":"general"}]}',
+        ):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                parse_ollama_decision(payload)
+
     def test_no_code_execution(self):
         with self.assertRaises(ValueError):
             parse_ollama_decision('{"actions":[{"type":"run_shell","cmd":"powershell"}]}')
@@ -192,8 +212,13 @@ class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
 
         invalid = FakeSession([first, first])
         with patch.object(app.aiohttp, "ClientSession", return_value=invalid):
-            with self.assertRaisesRegex(ValueError, "plan compatible"):
+            with self.assertRaisesRegex(ValueError, "plan vérifiable"):
                 await app.ollama_plan("Crée un salon textuel bienvenue", "qwen-test")
+
+        empty = FakeSession(['{"actions":[]}', '{"actions":[]}'])
+        with patch.object(app.aiohttp, "ClientSession", return_value=empty):
+            with self.assertRaisesRegex(ValueError, "Modules actifs"):
+                await app.ollama_plan("Configure les récompenses avec des détails manquants", "qwen-test")
 
 
 class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
@@ -266,6 +291,17 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["plan"]["actions"], [
             {"type": "create_text_channel", "name": "bienvenue"},
             {"type": "create_text_channel", "name": "au revoir"},
+        ])
+
+    async def test_enable_activity_stats_without_ai_or_guessing_other_features(self):
+        with patch.object(app, "ollama_models", new=AsyncMock(side_effect=AssertionError("not needed"))):
+            result = await self.client.post("/api/plan", json={
+                "guild_id": "1567347687379050727", "mode": "auto",
+                "prompt": "Active les statistiques des messages",
+            }, headers=self.headers)
+        self.assertEqual(result.status, 200)
+        self.assertEqual((await result.json())["plan"]["actions"], [
+            {"type": "set_module", "module": "activity_stats", "enabled": "true"},
         ])
 
     async def test_ai_cannot_invent_deletion(self):
