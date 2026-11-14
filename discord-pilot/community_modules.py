@@ -20,6 +20,16 @@ MODULES = {
                  "fields": [("role_id", "role", "Rôle attribué")], "requires": "members"},
     "xp": {"title": "XP et classement", "icon": "🏆", "description": "10 XP par message valide, une fois par minute et par personne, avec niveaux et classement.",
            "fields": [("channel_id", "optional_text", "Salon des annonces de niveau (facultatif)")]},
+    "level_rewards": {"title": "Récompense de niveau", "icon": "🎖️", "description": "Attribue un rôle lorsque le membre atteint le niveau XP indiqué. Le module XP doit aussi être actif.",
+                      "fields": [("level", "positive_int", "Niveau requis (1 à 1 000)"),
+                                 ("role_id", "role", "Rôle récompense")]},
+    "invite_rewards": {"title": "Récompense d'invitations", "icon": "🎉", "description": "Attribue un rôle à l'invitant après le nombre d'arrivées identifiées indiqué. Les invitations non attribuables ne comptent pas.",
+                       "fields": [("invites", "positive_int", "Invitations requises (1 à 1 000)"),
+                                  ("role_id", "role", "Rôle récompense")], "requires": "members"},
+    "activity_stats": {"title": "Statistiques des messages", "icon": "📈", "description": "Compte les messages reçus pendant la connexion du bot, sans enregistrer leur contenu. Affiche un classement dans le tableau de bord.",
+                       "fields": []},
+    "warnings": {"title": "Avertissements manuels", "icon": "⚠️", "description": "Permet à l'administrateur local d'enregistrer un avertissement et d'envoyer un journal privé. Aucune sanction automatique.",
+                 "fields": [("channel_id", "private_text", "Salon privé des avertissements")]},
     "antispam": {"title": "Anti-spam", "icon": "🛡️", "description": "Supprime le 6e message en 8 secondes et applique une pause de 60 secondes si autorisé.",
                  "fields": []},
     "antilinks": {"title": "Anti-liens", "icon": "🔗", "description": "Supprime les messages contenant des liens externes, hors modérateurs.",
@@ -101,6 +111,10 @@ def normalize_module(name: str, data: dict, guild) -> dict:
             if result["enabled"] and not words:
                 raise ValueError("Saisis au moins un mot à filtrer.")
             result[key] = ", ".join(dict.fromkeys(words))
+        elif kind == "positive_int":
+            if not re.fullmatch(r"[1-9][0-9]{0,3}", value) or int(value) > 1000:
+                raise ValueError(f"{key} doit être un entier compris entre 1 et 1 000.")
+            result[key] = value
         elif kind == "emoji":
             if not value or len(value) > 80 or any(ch.isspace() for ch in value):
                 raise ValueError("Émoji invalide.")
