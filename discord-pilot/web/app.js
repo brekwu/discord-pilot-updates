@@ -221,28 +221,6 @@ async function models() {
   } catch { $("ollamaStatus").textContent = "Mode sans IA disponible"; }
 }
 
-function askForDetails(data) {
-  const source = data.original_prompt || $("requestText").value.trim();
-  modal({title: "Je te demande une précision", description: data.question || "Qu'est-ce que je dois préciser ?",
-    fields: [{id: "answer", label: "Ta réponse", placeholder: "Exemple : annonces"}],
-    confirmText: "Continuer", onConfirm: async ({answer}) => {
-      const value = answer.trim();
-      if (!value || value.length > 100 || /[;\n\r]/.test(value)) throw new Error("Précise ta réponse avec un nom court, sans point-virgule.");
-      const offline = $("modeSelect").value === "local" || !app.models.length;
-      if (offline && /\b(?:channels?|chan|canal|canaux|salons?)\b/i.test(source)) {
-        const category = source.match(/dans\s+(?:la\s+)?cat[eé]gorie\s+(.+)$/i);
-        $("requestText").value = `Crée un salon ${value}${category ? ` dans la catégorie ${category[1]}` : ""}`;
-      } else if (offline && /\br[oô]le\b/i.test(source)) {
-        $("requestText").value = `Crée un rôle ${value}`;
-      } else if (offline && /\bcat[eé]gorie\b/i.test(source)) {
-        $("requestText").value = `Crée une catégorie ${value}`;
-      } else {
-        $("requestText").value = `${source}\nPrécision : ${value}`;
-      }
-      await createPlan();
-    }});
-}
-
 function switchTab(key) {
   app.tab = key;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === key));
@@ -302,8 +280,10 @@ async function createPlan() {
   app.busy = true; $("generateButton").textContent = "Analyse de la demande…"; renderOverview();
   try {
     const data = await request("/api/plan", {data: {guild_id: app.selected, prompt, mode: $("modeSelect").value, model: $("modelSelect").value || undefined}});
-    if (data.needs_clarification) { askForDetails(data); return; }
-    app.plan = data.plan; renderPlan(); await loadHistory();
+    if (data.needs_clarification) throw new Error(data.question || "Décris une modification précise.");
+    app.plan = data.plan;
+    $("requestText").value = data.plan.prompt; // Remove old clarification lines.
+    renderPlan(); await loadHistory();
     $("planPanel").scrollIntoView({behavior: "smooth", block: "nearest"}); toast("Plan créé. Vérifie les actions avant de valider.");
   } catch (e) { toast(e.message, true); }
   finally { app.busy = false; $("generateButton").textContent = "✦ Préparer le plan  →"; renderOverview(); }
