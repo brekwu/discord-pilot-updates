@@ -55,6 +55,92 @@ class LocalLanguageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_ollama_decision('{"actions":[{"type":"run_shell","cmd":"powershell"}]}')
 
+    def test_ai_common_discord_aliases_are_canonicalized(self):
+        actions, question = parse_ollama_decision('{"actions":['
+            '{"action":"create_channel","channel_name":"bienvenue",'
+            '"channel_type":"text","category_name":"ACCUEIL"},'
+            '{"type":"add_channel","name":"Général","channel_type":"voice"},'
+            '{"type":"add_role","role_name":"Membre"},'
+            '{"type":"post_message","channel_name":"annonces","message":"Bonjour !"},'
+            '{"type":"private_channel","channel_name":"staff","role_name":"Modérateur"}'
+            ']}')
+        self.assertIsNone(question)
+        self.assertEqual(actions, [
+            {"type": "create_text_channel", "name": "bienvenue", "category": "ACCUEIL"},
+            {"type": "create_voice_channel", "name": "Général"},
+            {"type": "create_role", "name": "Membre"},
+            {"type": "send_message", "channel": "annonces", "content": "Bonjour !"},
+            {"type": "make_private", "name": "staff", "role": "Modérateur"},
+        ])
+        camel, _ = parse_ollama_decision('{"actions":['
+            '{"action":"createChannel","channelName":"nouveautes",'
+            '"channelType":"GUILD_TEXT"},'
+            '{"type":"addRole","roleName":"VIP"}'
+            ']}')
+        self.assertEqual(camel, [
+            {"type": "create_text_channel", "name": "nouveautes"},
+            {"type": "create_role", "name": "VIP"},
+        ])
+
+    def test_unsupported_or_dangerous_model_actions_are_never_approximated(self):
+        for payload in (
+            '{"actions":[{"type":"create_forum_channel","name":"forum"}]}',
+            '{"actions":[{"type":"run_shell","cmd":"powershell"}]}',
+            '{"actions":[{"type":"create_role","name":"Admin","permissions":"administrator"}]}',
+            '{"actions":[{"type":"create_channel","name":"forum","channel_type":"forum"}]}',
+            '{"actions":[{"type":"create_text_channel","name":"staff","channel_type":"voice"}]}',
+        ):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                parse_ollama_decision(payload)
+
+
+class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
+    async def test_one_automatic_repair_recovers_from_model_hallucination(self):
+        class FakeResponse:
+            status = 200
+
+            def __init__(self, answer):
+                self.answer = answer
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+            async def json(self):
+                return {"message": {"content": self.answer}}
+
+        class FakeSession:
+            def __init__(self, answers):
+                self.answers = list(answers)
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+            def post(self, _url, json):
+                self.calls.append(json)
+                return FakeResponse(self.answers.pop(0))
+
+        first = '{"actions":[{"type":"create_forum_channel","name":"bienvenue"}]}'
+        repaired = '{"actions":[{"type":"create_text_channel","name":"bienvenue"}]}'
+        fake = FakeSession([first, repaired])
+        with patch.object(app.aiohttp, "ClientSession", return_value=fake):
+            actions, question = await app.ollama_plan("Crée un salon textuel bienvenue", "qwen-test")
+        self.assertEqual(actions, [{"type": "create_text_channel", "name": "bienvenue"}])
+        self.assertIsNone(question)
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIn("create_text_channel", fake.calls[1]["messages"][-1]["content"])
+
+        invalid = FakeSession([first, first])
+        with patch.object(app.aiohttp, "ClientSession", return_value=invalid):
+            with self.assertRaisesRegex(ValueError, "plan compatible"):
+                await app.ollama_plan("Crée un salon textuel bienvenue", "qwen-test")
+
 
 class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

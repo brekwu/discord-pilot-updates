@@ -434,19 +434,47 @@ async def api_update_apply(request):
 
 async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
     timeout = aiohttp.ClientTimeout(total=120)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}]
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post("http://127.0.0.1:11434/api/chat", json={
-            "model": model,
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": 0},
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                         {"role": "user", "content": prompt}],
-        }) as response:
-            if response.status >= 400:
-                raise ValueError(f"Ollama ne peut pas utiliser le modèle « {model} » (HTTP {response.status}).")
-            data = await response.json()
-    return parse_ollama_decision(data["message"]["content"])
+        for attempt in range(2):
+            async with session.post("http://127.0.0.1:11434/api/chat", json={
+                "model": model,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0},
+                "messages": messages,
+            }) as response:
+                if response.status >= 400:
+                    raise ValueError(f"Ollama ne peut pas utiliser le modèle « {model} » (HTTP {response.status}).")
+                data = await response.json()
+            answer = data["message"]["content"]
+            try:
+                if not isinstance(answer, str):
+                    raise ValueError("Réponse IA non textuelle.")
+                actions, question = parse_ollama_decision(answer)
+                if actions or not question:
+                    return actions, question
+                problem = "Une demande de précisions ne constitue pas un plan."
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                problem = str(exc)
+            if attempt == 1:
+                raise ValueError("Le modèle IA n'a pas réussi à produire un plan compatible : "
+                                 f"{problem} Aucune modification n'a été effectuée.")
+            # One internal formatting repair, no clarification loop shown to
+            # the user. The exact allowlist remains enforced by the parser.
+            messages.extend([
+                {"role": "assistant", "content": answer[:4000] if isinstance(answer, str) else ""},
+                {"role": "user", "content":
+                 "Ta réponse ne respecte pas le format de Discord Pilot : " + problem[:300] +
+                 ". Corrige-la en JSON avec uniquement une liste actions et des types autorisés : "
+                 "create_category, create_text_channel, create_voice_channel, create_role, "
+                 "rename_channel, rename_role, set_topic, send_message, make_private, "
+                 "delete_channel, delete_role. Conserve exactement la demande d'origine. "
+                 "N'invente aucune action supplémentaire ou droit sensible. "
+                 "Si tu ne peux pas la réaliser, renvoie {\"actions\":[]}."},
+            ])
+    return [], None
 
 
 async def api_plan(request):
