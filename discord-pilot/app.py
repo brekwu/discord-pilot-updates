@@ -24,6 +24,7 @@ from aiohttp import web
 import discord
 
 from discord_ops import execute_action
+from integration_catalog import PROVIDERS, catalog, recommended_providers
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
                      collapse_old_clarifications, community_automation_plan,
                      default_creation_plan, local_parse,
@@ -705,7 +706,11 @@ async def api_plan(request):
         raise ValueError("Mode d'interprétation inconnu.")
     # An explicit, understood command must go straight to a draft. Never let
     # an optional model turn it into a repeated clarification dialog.
-    actions = community_automation_plan(prompt) or local_parse(prompt) or default_creation_plan(prompt)
+    external = recommended_providers(prompt)
+    actions = (community_automation_plan(prompt)
+               or ([{"type": "suggest_integration", "provider": provider} for provider in external]
+                   if external else [])
+               or local_parse(prompt) or default_creation_plan(prompt))
     used = "local"
     if not actions and mode != "local":
         models = await ollama_models()
@@ -728,6 +733,22 @@ async def api_plan(request):
     return web.json_response({"plan": plan})
 
 
+async def api_catalog(request):
+    return web.json_response(catalog())
+
+
+async def api_integration_plan(request):
+    data = await body_json(request)
+    guild_id = require_id(data.get("guild_id"))
+    provider_id = data.get("provider")
+    if not isinstance(provider_id, str) or provider_id not in PROVIDERS:
+        raise ValueError("Bot externe inconnu ou non validé.")
+    provider = PROVIDERS[provider_id]
+    actions = validate_actions([{"type": "suggest_integration", "provider": provider_id}])
+    plan = STATE.add(guild_id, f"Ajouter {provider['name']}", actions, "catalogue-externe")
+    return web.json_response({"plan": plan})
+
+
 async def api_preset(request):
     data = await body_json(request)
     guild_id = require_id(data.get("guild_id"))
@@ -746,9 +767,18 @@ async def run_plan(plan, guild):
         STATE.save()
         for index, item in enumerate(plan["actions"]):
             try:
-                status, detail = await execute_action(guild, item, state=STATE)
-                row = {"index": index, "status": status, "detail": detail,
-                       "description": description(item)}
+                if item["type"] == "suggest_integration":
+                    provider = PROVIDERS[item["provider"]]
+                    row = {"index": index, "status": "authorization_required",
+                           "detail": ("Non installé. Ouvre le site officiel, sélectionne ton serveur et "
+                                      "autorise l'application dans Discord. La configuration tierce "
+                                      "peut ensuite nécessiter son tableau de bord."),
+                           "authorization_url": provider["url"],
+                           "description": description(item)}
+                else:
+                    status, detail = await execute_action(guild, item, state=STATE)
+                    row = {"index": index, "status": status, "detail": detail,
+                           "description": description(item)}
             except discord.Forbidden:
                 row = {"index": index, "status": "failed", "detail": "Permissions Discord insuffisantes pour cette action.",
                        "description": description(item)}
@@ -764,7 +794,10 @@ async def run_plan(plan, guild):
             plan["results"].append(row)
             STATE.save()
         failures = sum(1 for r in plan["results"] if r["status"] == "failed")
-        plan["status"] = "failed" if failures == len(plan["results"]) else "partial" if failures else "completed"
+        approvals = sum(1 for r in plan["results"] if r["status"] == "authorization_required")
+        plan["status"] = ("failed" if failures == len(plan["results"]) else
+                          "partial" if failures else
+                          "authorization_required" if approvals else "completed")
         STATE.save()
         if any(a["type"].startswith("configure_") for a in plan["actions"]):
             try:
@@ -785,7 +818,7 @@ async def api_execute(request):
     if plan["status"] != "draft":
         raise ValueError("Ce plan est déjà lancé ou terminé. Pour réessayer, crée un nouveau plan.")
     guild = MANAGER.get_guild(plan["guild_id"])
-    if guild is None:
+    if guild is None and any(item["type"] != "suggest_integration" for item in plan["actions"]):
         raise ValueError("Bot déconnecté ou absent du serveur. Aucune action envoyée.")
     if any(a["type"] in DANGEROUS_ACTIONS for a in plan["actions"]):
         if data.get("confirm_delete_name") != guild.name:
@@ -815,6 +848,8 @@ def build_app():
     app.router.add_get("/api/history/{guild_id}", api_history)
     app.router.add_get("/api/export/{guild_id}", api_export)
     app.router.add_get("/api/models", api_models)
+    app.router.add_get("/api/catalog", api_catalog)
+    app.router.add_post("/api/integrations/plan", api_integration_plan)
     app.router.add_post("/api/plan", api_plan)
     app.router.add_post("/api/preset", api_preset)
     app.router.add_post("/api/execute/{plan_id}", api_execute)
