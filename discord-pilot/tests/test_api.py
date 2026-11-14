@@ -78,6 +78,17 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                                               headers={"X-Pilot-CSRF": csrf, "Content-Type": "audio/webm;codecs=opus"})
             self.assertEqual(response.status, 200)
             compressed.assert_called_once_with(encoded, app.STATE.root, "audio/webm")
+        async def fragmented_audio():
+            # Force HTTP chunked transfers: the server must wait for *all*
+            # chunks, not decode the first bytes and truncate the speech.
+            for offset in range(0, len(payload), 1013):
+                yield payload[offset:offset + 1013]
+                await asyncio.sleep(0)
+
+        with patch.object(app, "transcribe_voice_audio", return_value=expected) as speech:
+            fragmented = await self.client.post("/api/transcribe", data=fragmented_audio(), headers=headers)
+            self.assertEqual(fragmented.status, 200)
+            speech.assert_called_once_with(payload, app.STATE.root, "audio/wav")
         invalid_type = await self.client.post("/api/transcribe", data=payload,
                                               headers={"X-Pilot-CSRF": csrf, "Content-Type": "application/octet-stream"})
         self.assertEqual(invalid_type.status, 400)
