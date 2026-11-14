@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], busy: false, updateAvailable: false };
 // No personal server identifiers are shipped in public updates; Discord provides real names after login.
 const known = {};
-const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE" };
+const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations" };
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -341,7 +341,8 @@ function renderPlan() {
   const p = app.plan; $("planPanel").hidden = !p;
   if (!p) return;
   $("planTitle").textContent = `${p.actions.length} action${p.actions.length > 1 ? "s" : ""} à ${p.status === "draft" ? "valider" : "suivre"}`;
-  $("planMeta").textContent = `Serveur : ${currentGuild()?.name || p.guild_id} · ${p.mode}`;
+  const automation = p.actions.some(a => a.type.startsWith("configure_"));
+  $("planMeta").textContent = `Serveur : ${currentGuild()?.name || p.guild_id} · ${p.mode}` + (automation ? " · ⚠ Messages automatiques uniquement quand le bot local reste lancé. L'intent Server Members et la permission Gérer le serveur sont nécessaires pour le suivi des invitations." : "");
   $("planBadge").textContent = stateName(p.status);
   $("planBadge").className = `pill ${p.status === "completed" ? "success" : ["failed", "partial"].includes(p.status) ? "failed" : ""}`;
   replace($("planActions"), p.actions.map((a, i) => {
@@ -365,6 +366,7 @@ async function bootstrap(quiet = false) {
     $("connectionBadge").className = `connection-badge ${data.online ? "online" : ""}`;
     $("connectionBadge").innerHTML = "<i></i>"; $("connectionBadge").append(document.createTextNode(data.online ? "Bot connecté" : data.connecting ? "Connexion…" : "Déconnecté"));
     $("profileText").textContent = data.online ? data.bot?.name : data.error || "Non connecté";
+    if (data.automation_warning && !quiet) toast(data.automation_warning, true);
     $("inviteButton").disabled = !data.online;
     $("updateVersion").textContent = `v${data.version || "?"}`;
     $("updateButton").classList.toggle("available", Boolean(data.update_pending) || app.updateAvailable);

@@ -12,6 +12,7 @@ ACTION_TYPES = {
     "create_category", "create_text_channel", "create_voice_channel",
     "create_role", "rename_channel", "rename_role", "set_topic",
     "send_message", "make_private", "delete_channel", "delete_role",
+    "configure_welcome", "configure_farewell", "configure_invites",
 }
 
 ACTION_LABELS = {
@@ -26,6 +27,9 @@ ACTION_LABELS = {
     "make_private": "Rendre le salon privé",
     "delete_channel": "Supprimer le salon",
     "delete_role": "Supprimer le rôle",
+    "configure_welcome": "Activer les messages d'arrivée",
+    "configure_farewell": "Activer les messages de départ",
+    "configure_invites": "Activer le suivi des invitations",
 }
 
 DANGEROUS_ACTIONS = {"delete_channel", "delete_role"}
@@ -42,6 +46,9 @@ FIELDS = {
     "make_private": ("name", "role"),
     "delete_channel": ("name",),
     "delete_role": ("name",),
+    "configure_welcome": ("channel",),
+    "configure_farewell": ("channel",),
+    "configure_invites": ("channel",),
 }
 
 OPTIONAL = {
@@ -77,6 +84,12 @@ MODEL_ACTION_ALIASES = {
     "envoyer_message": "send_message", "publier_message": "send_message",
     "renommer_salon": "rename_channel", "renommer_role": "rename_role",
     "supprimer_salon": "delete_channel", "supprimer_role": "delete_role",
+    "setup_welcome": "configure_welcome", "welcome_messages": "configure_welcome",
+    "set_welcome": "configure_welcome", "configurer_bienvenue": "configure_welcome",
+    "setup_goodbye": "configure_farewell", "goodbye_messages": "configure_farewell",
+    "set_goodbye": "configure_farewell", "configurer_depart": "configure_farewell",
+    "invite_tracker": "configure_invites", "track_invites": "configure_invites",
+    "setup_invites": "configure_invites", "suivi_invitations": "configure_invites",
 }
 
 MODEL_FIELD_ALIASES = {
@@ -205,7 +218,7 @@ def normalize_model_actions(value: Any) -> list[dict[str, str]]:
             if alias in {"create_text_channel", "create_voice_channel"} and new_kind != kind:
                 raise ValueError("Type de salon contradictoire dans la réponse de l'IA.")
             kind = new_kind
-        if kind == "send_message" and "name" in fields and "channel" not in fields:
+        if (kind == "send_message" or kind.startswith("configure_")) and "name" in fields and "channel" not in fields:
             fields["channel"] = fields.pop("name")
         normalized.append({"type": kind, **fields})
     return validate_actions(normalized)
@@ -249,6 +262,9 @@ create_category {type,name}
 create_text_channel {type,name,category? ,topic?}
 create_voice_channel {type,name,category?}
 create_role {type,name,color?} (color: hex #RRGGBB uniquement)
+configure_welcome {type,channel} (envoie un message lorsqu'un membre rejoint)
+configure_farewell {type,channel} (envoie un message lorsqu'un membre quitte)
+configure_invites {type,channel} (annonce chaque invitation attribuable et son compteur)
 rename_channel {type,name,new_name}
 rename_role {type,name,new_name}
 set_topic {type,name,topic}
@@ -260,7 +276,46 @@ Pour les catégories, crée-les avant les salons. Utilise un plan précis, 40 ac
 Ne crée jamais de rôle Administrateur avec des permissions dangereuses et n'ajoute aucun droit d'administrateur.
 Si aucune action concrète sûre n'est possible, réponds {"actions":[]}.
 Ne propose aucune action implicite en dehors de la demande. Évite les doublons.
+Les trois automatisations exigent que le bot reste connecté et que l'intent Members soit activé.
 """
+
+
+def community_automation_plan(prompt: str) -> list[dict[str, str]]:
+    """Complete, reversible draft for combined joins/leaves/invite requests.
+
+    Never guess an invite attribution, send a message immediately or install
+    something on Discord. Only configure listeners on explicit event language.
+    """
+    normalized = norm(prompt)
+    welcome = bool(re.search(r"\bbienvenu\w*\b", normalized) and
+                   re.search(r"\b(?:arriv\w*|rejoin\w*|rejoi\w*|entre\w*|nouveau membre)\b", normalized))
+    farewell = bool(re.search(r"\b(?:au[ -]revoir|depart\w*|quitt\w*)\b", normalized) and
+                    re.search(r"\b(?:quitt\w*|part\b|sort\b|depart\w*)\b", normalized))
+    invitations = bool(re.search(r"\binvit\w*\b", normalized) and
+                       re.search(r"\b(?:personne\w*|utilisateur\w*|onzieme|premiere|dixieme|11|10|compte\w*)\b", normalized))
+    if not any((welcome, farewell, invitations)):
+        return []
+    if re.search(r"\b(?:supprim\w*|banni\w*|sondage\w*|ticket\w*|musique|paiement\w*)\b", normalized):
+        return []  # Do not silently omit unrelated requested features.
+
+    already_welcome = bool(re.search(r"\bsalon\s+bienvenu\w*\b.{0,65}\b(?:deja|existe|cree)\b", normalized))
+    welcome_name = "bienvenu" if re.search(r"\bsalon\s+bienvenu\b", normalized) else "bienvenue"
+    creation_requested = bool(re.search(r"\b(?:cree\w*|creer|ajout\w*|rajout\w*)\s+(?:(?:un|une|des|les|trois|3)\s+)?salon", normalized))
+    actions = []
+    if creation_requested:
+        if welcome and not already_welcome:
+            actions.append(action("create_text_channel", name=welcome_name))
+        if farewell:
+            actions.append(action("create_text_channel", name="au-revoir"))
+        if invitations:
+            actions.append(action("create_text_channel", name="invitation"))
+    if welcome:
+        actions.append(action("configure_welcome", channel=welcome_name))
+    if farewell:
+        actions.append(action("configure_farewell", channel="au-revoir"))
+    if invitations:
+        actions.append(action("configure_invites", channel="invitation"))
+    return validate_actions(actions)
 
 
 def missing_information(prompt: str) -> str | None:
@@ -483,6 +538,8 @@ def local_parse(prompt: str) -> list[dict[str, str]]:
 
 def description(item: dict[str, str]) -> str:
     label = ACTION_LABELS[item["type"]]
+    if item["type"].startswith("configure_"):
+        return f"{label} dans #{item['channel']} (bot local connecté requis)"
     if item["type"] == "send_message":
         return f"{label} dans #{item['channel']} : {item['content'][:80]}"
     if item["type"] == "make_private":

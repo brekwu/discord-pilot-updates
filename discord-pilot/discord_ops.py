@@ -1,0 +1,162 @@
+"""Small allowlisted executor. No arbitrary Discord code, shell, or eval."""
+
+from __future__ import annotations
+
+import discord
+
+from planner import norm
+
+
+class NotFoundOrAmbiguous(ValueError):
+    pass
+
+
+def find_unique(items, name: str, description: str):
+    matches = [item for item in items if norm(item.name) == norm(name)]
+    if not matches:
+        raise NotFoundOrAmbiguous(f"{description} « {name} » introuvable.")
+    if len(matches) > 1:
+        raise NotFoundOrAmbiguous(f"Plusieurs {description.lower()}s se nomment « {name} » : précise un identifiant.")
+    return matches[0]
+
+
+def role_by_name(guild, name: str):
+    return find_unique(guild.roles, name, "Rôle")
+
+
+def channel_by_name(guild, name: str):
+    target = norm(name.lstrip("#"))
+    exact = [channel for channel in guild.channels if norm(channel.name) == target]
+    if exact:
+        return find_unique(exact, exact[0].name, "Salon")
+    # Common dictation variants for the built-in welcome room.
+    if target in {"bienvenu", "bienvenue"}:
+        welcome_matches = [channel for channel in guild.channels
+                           if norm(channel.name) in {"bienvenu", "bienvenue"}]
+        if len(welcome_matches) == 1:
+            return welcome_matches[0]
+        if len(welcome_matches) > 1:
+            raise NotFoundOrAmbiguous("Plusieurs salons de bienvenue existent : choisis le nom exact.")
+    # Discord converts spaces to hyphens in text-channel names.
+    slug = target.replace(" ", "-").replace("_", "-")
+    matches = [channel for channel in guild.channels
+               if norm(channel.name).replace(" ", "-").replace("_", "-") == slug]
+    if not matches:
+        raise NotFoundOrAmbiguous(f"Salon « {name} » introuvable.")
+    if len(matches) > 1:
+        raise NotFoundOrAmbiguous(f"Plusieurs salons correspondent à « {name} ».")
+    return matches[0]
+
+
+def category_by_name(guild, name: str):
+    return find_unique(guild.categories, name, "Catégorie")
+
+
+async def execute_action(guild: discord.Guild, item: dict, state=None) -> tuple[str, str]:
+    """Returns (done|skipped, human-readable detail). Permission errors bubble up."""
+    t = item["type"]
+    reason = "Discord Pilot — modification confirmée depuis l'application locale"
+    if t in {"configure_welcome", "configure_farewell", "configure_invites"}:
+        if state is None:
+            raise ValueError("Stockage des automatisations indisponible.")
+        channel = channel_by_name(guild, item["channel"])
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError("Les messages automatiques exigent un salon textuel.")
+        kind = t.removeprefix("configure_")
+        changed = state.set_automation(str(guild.id), kind, str(channel.id))
+        if not changed:
+            return "skipped", "Cette automatisation utilise déjà ce salon."
+        return "done", ("Automatisation enregistrée : elle fonctionne lorsque le bot local est connecté "
+                        "avec l'intent Server Members activé dans Discord Developer Portal.")
+    if t == "create_category":
+        existing = [c for c in guild.categories if norm(c.name) == norm(item["name"])]
+        if existing:
+            return "skipped", "Cette catégorie existe déjà."
+        result = await guild.create_category(item["name"], reason=reason)
+        return "done", f"Catégorie créée (ID {result.id})."
+    if t in {"create_text_channel", "create_voice_channel"}:
+        category = category_by_name(guild, item["category"]) if item.get("category") else None
+        existing = [c for c in guild.channels
+                    if norm(c.name) == norm(item["name"])
+                    and c.category_id == (category.id if category else None)
+                    and isinstance(c, discord.VoiceChannel if t == "create_voice_channel" else discord.TextChannel)]
+        if existing:
+            return "skipped", "Ce salon existe déjà dans cette catégorie."
+        if t == "create_voice_channel":
+            result = await guild.create_voice_channel(item["name"], category=category, reason=reason)
+        else:
+            result = await guild.create_text_channel(item["name"], category=category,
+                                                     topic=item.get("topic"), reason=reason)
+        return "done", f"Salon créé (ID {result.id})."
+    if t == "create_role":
+        existing = [r for r in guild.roles if norm(r.name) == norm(item["name"])]
+        if existing:
+            return "skipped", "Ce rôle existe déjà."
+        color = item.get("color")
+        kwargs = {}
+        if color:
+            if len(color) != 7 or color[0] != "#" or any(c not in "0123456789abcdefABCDEF" for c in color[1:]):
+                raise ValueError("La couleur doit être au format #RRGGBB.")
+            kwargs["colour"] = discord.Colour(int(color[1:], 16))
+        result = await guild.create_role(name=item["name"], permissions=discord.Permissions.none(),
+                                         reason=reason, **kwargs)
+        return "done", f"Rôle créé sans permissions sensibles (ID {result.id})."
+    if t == "rename_channel":
+        channel = channel_by_name(guild, item["name"])
+        if channel.name == item["new_name"]:
+            return "skipped", "Le salon porte déjà ce nom."
+        await channel.edit(name=item["new_name"], reason=reason)
+        return "done", "Salon renommé."
+    if t == "rename_role":
+        role = role_by_name(guild, item["name"])
+        if role.is_default() or role.managed:
+            raise ValueError("Un rôle système ne peut pas être renommé.")
+        if role.name == item["new_name"]:
+            return "skipped", "Le rôle porte déjà ce nom."
+        await role.edit(name=item["new_name"], reason=reason)
+        return "done", "Rôle renommé."
+    if t == "set_topic":
+        channel = channel_by_name(guild, item["name"])
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError("La description concerne les salons textuels.")
+        if channel.topic == item["topic"]:
+            return "skipped", "Description déjà identique."
+        await channel.edit(topic=item["topic"], reason=reason)
+        return "done", "Description mise à jour."
+    if t == "send_message":
+        channel = channel_by_name(guild, item["channel"])
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError("Un message ne peut être publié que dans un salon textuel.")
+        msg = await channel.send(item["content"], allowed_mentions=discord.AllowedMentions.none())
+        return "done", f"Message publié (ID {msg.id}), sans mention automatique."
+    if t == "make_private":
+        channel = channel_by_name(guild, item["name"])
+        role = role_by_name(guild, item["role"])
+        if role.is_default():
+            raise ValueError("Le rôle @everyone ne peut pas être l'exception d'un salon privé.")
+        everyone = guild.default_role
+        every_overwrite = channel.overwrites_for(everyone)
+        role_overwrite = channel.overwrites_for(role)
+        if every_overwrite.view_channel is False and role_overwrite.view_channel is True:
+            return "skipped", "Ce salon est déjà privé pour ce rôle."
+        every_overwrite.view_channel = False
+        role_overwrite.view_channel = True
+        # Keep the bot's access even after @everyone loses access.
+        if guild.me:
+            bot_overwrite = channel.overwrites_for(guild.me)
+            bot_overwrite.view_channel = True
+            await channel.set_permissions(guild.me, overwrite=bot_overwrite, reason=reason)
+        await channel.set_permissions(role, overwrite=role_overwrite, reason=reason)
+        await channel.set_permissions(everyone, overwrite=every_overwrite, reason=reason)
+        return "done", "Accès fermé à @everyone et autorisé au rôle choisi."
+    if t == "delete_channel":
+        channel = channel_by_name(guild, item["name"])
+        await channel.delete(reason=reason)
+        return "done", "Salon supprimé (action irréversible)."
+    if t == "delete_role":
+        role = role_by_name(guild, item["name"])
+        if role.is_default() or role.managed:
+            raise ValueError("Impossible de supprimer un rôle système.")
+        await role.delete(reason=reason)
+        return "done", "Rôle supprimé (action irréversible)."
+    raise ValueError("Action inconnue.")

@@ -25,7 +25,8 @@ import discord
 
 from discord_ops import execute_action
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
-                     collapse_old_clarifications, default_creation_plan, local_parse,
+                     collapse_old_clarifications, community_automation_plan,
+                     default_creation_plan, local_parse,
                      norm, parse_ollama_decision,
                      validate_actions)
 from storage import State, load_token, remove_token, save_token
@@ -46,14 +47,39 @@ MAX_VOICE_SECONDS = 300
 VOICE_MIME_TYPES = {"audio/wav", "audio/webm", "audio/ogg", "audio/mp4"}
 
 
+def invite_ordinal(count: int) -> str:
+    words = {1: "première", 2: "deuxième", 3: "troisième", 4: "quatrième",
+             5: "cinquième", 6: "sixième", 7: "septième", 8: "huitième",
+             9: "neuvième", 10: "dixième", 11: "onzième", 12: "douzième"}
+    return words.get(count, f"{count}e")
+
+
+def identify_inviter(previous: dict, current: dict) -> int | None:
+    """Credit one join only when exactly one invitation increased by one use.
+
+    When multiple links increase or a baseline is missing, do not invent an
+    attribution. Snapshots reset on restart, so offline joins are not counted.
+    """
+    changes = []
+    for code, (uses, inviter_id) in current.items():
+        old = previous.get(code)
+        if old is not None and uses > old[0]:
+            changes.append((uses - old[0], inviter_id))
+    if len(changes) == 1 and changes[0][0] == 1:
+        return changes[0][1]
+    return None
+
+
 def update_url() -> str:
     return STATE.state.get("update_url") or DEFAULT_UPDATE_URL
 
 
 class PilotBot(discord.Client):
-    def __init__(self, manager):
-        super().__init__(intents=discord.Intents(guilds=True))
+    def __init__(self, manager, member_events=False):
+        super().__init__(intents=discord.Intents(guilds=True, invites=True, members=member_events))
         self.manager = manager
+        self.invite_snapshots: dict[int, dict] = {}
+        self.invite_locks: dict[int, asyncio.Lock] = {}
 
     async def on_ready(self):
         self.manager.error = None
@@ -63,6 +89,79 @@ class PilotBot(discord.Client):
                 save_token(self.manager.current_token, STATE.root)
             except OSError:
                 self.manager.error = "Connexion réussie, mais impossible de mémoriser le token."
+        if self.intents.members:
+            for guild in self.guilds:
+                if STATE.automation_channel(str(guild.id), "invites"):
+                    await self.refresh_invites(guild)
+
+    async def refresh_invites(self, guild):
+        try:
+            invites = await guild.invites()
+        except (discord.Forbidden, discord.HTTPException):
+            self.manager.automation_warning = (
+                "Suivi d'invitations indisponible : donne au bot la permission Gérer le serveur.")
+            return None
+        snapshot = {inv.code: (inv.uses or 0, inv.inviter.id if inv.inviter else None)
+                    for inv in invites}
+        self.invite_snapshots[guild.id] = snapshot
+        return snapshot
+
+    async def on_invite_create(self, invite):
+        snapshot = self.invite_snapshots.get(invite.guild.id)
+        if snapshot is not None:
+            snapshot[invite.code] = (invite.uses or 0, invite.inviter.id if invite.inviter else None)
+
+    async def on_invite_delete(self, invite):
+        snapshot = self.invite_snapshots.get(invite.guild.id)
+        if snapshot is not None:
+            snapshot.pop(invite.code, None)
+
+    async def send_automation(self, guild, kind, content, mention_users=False):
+        configured = STATE.automation_channel(str(guild.id), kind)
+        if not configured:
+            return
+        channel = guild.get_channel(int(configured))
+        if not isinstance(channel, discord.TextChannel):
+            self.manager.automation_warning = f"Salon automatique {kind} introuvable : vérifie la configuration."
+            return
+        try:
+            await channel.send(content, allowed_mentions=discord.AllowedMentions(
+                users=mention_users, roles=False, everyone=False))
+        except (discord.Forbidden, discord.HTTPException):
+            self.manager.automation_warning = (
+                f"Impossible d'écrire dans #{channel.name} : vérifie Voir le salon et Envoyer des messages.")
+
+    async def on_member_join(self, member):
+        if STATE.automation_channel(str(member.guild.id), "welcome"):
+            await self.send_automation(member.guild, "welcome",
+                                       f"👋 Bienvenue sur **{discord.utils.escape_markdown(member.guild.name)}**, {member.mention} !",
+                                       mention_users=True)
+        if not STATE.automation_channel(str(member.guild.id), "invites"):
+            return
+        async with self.invite_locks.setdefault(member.guild.id, asyncio.Lock()):
+            previous = self.invite_snapshots.get(member.guild.id)
+            if previous is None:
+                await self.refresh_invites(member.guild)
+                return  # No trustworthy baseline after reconnect or missing permission.
+            current = await self.refresh_invites(member.guild)
+            if current is None:
+                return
+            inviter_id = identify_inviter(previous, current)
+            if inviter_id is None:
+                await asyncio.sleep(1)
+                newer = await self.refresh_invites(member.guild)
+                if newer is not None:
+                    inviter_id = identify_inviter(previous, newer)
+            if inviter_id is None or inviter_id == member.id:
+                return
+            count = STATE.increment_invites(str(member.guild.id), str(inviter_id))
+            await self.send_automation(member.guild, "invites",
+                                       f"🎉 <@{inviter_id}> vient d'inviter sa **{invite_ordinal(count)}** personne sur le serveur !",
+                                       mention_users=True)
+
+    async def on_member_remove(self, member):
+        await self.send_automation(member.guild, "farewell",
+                                   f"👋 **{discord.utils.escape_markdown(member.display_name)}** a quitté le serveur.")
 
 
 class BotManager:
@@ -73,15 +172,19 @@ class BotManager:
         self.remember = False
         self.ready = False
         self.error: str | None = None
+        self.automation_warning: str | None = None
 
-    async def connect(self, token: str, remember: bool):
+    async def connect(self, token: str, remember: bool, member_events: bool | None = None):
         if self.task and not self.task.done():
             await self.disconnect(remove_saved=False)
         self.ready = False
         self.error = None
+        self.automation_warning = None
         self.remember = remember
         self.current_token = token
-        self.bot = PilotBot(self)
+        if member_events is None:
+            member_events = any(config for config in STATE.state.get("automations", {}).values())
+        self.bot = PilotBot(self, member_events=member_events)
         self.task = asyncio.create_task(self._start(self.bot, token))
 
     async def _start(self, bot, token: str):
@@ -92,7 +195,20 @@ class BotManager:
                           "ton application > Bot > Reset Token, copie le nouveau token "
                           "(pas l'Application ID ni le Client Secret).")
         except discord.PrivilegedIntentsRequired:
-            self.error = "Le bot exige des intents non disponibles dans sa configuration."
+            # Keep ordinary server editing operational if the privileged
+            # Members intent has not been enabled in Developer Portal.
+            if bot.intents.members:
+                self.automation_warning = ("Automatisations en attente : active Server Members "
+                                           "Intent dans Discord Developer Portal > Bot. "
+                                           "Le bot reste utilisable pour configurer les serveurs.")
+                try:
+                    await bot.close()
+                    self.bot = PilotBot(self, member_events=False)
+                    await self.bot.start(token, reconnect=True)
+                except (discord.DiscordException, OSError, aiohttp.ClientError) as exc:
+                    self.error = f"Connexion Discord impossible : {type(exc).__name__}."
+            else:
+                self.error = "Le bot exige des intents non disponibles dans sa configuration."
         except (discord.DiscordException, OSError, aiohttp.ClientError) as exc:
             self.error = f"Connexion Discord impossible : {type(exc).__name__}."
         except Exception as exc:
@@ -114,8 +230,19 @@ class BotManager:
         self.current_token = None
         self.ready = False
         self.error = None
+        self.automation_warning = None
         if remove_saved:
             remove_token(STATE.root)
+
+    async def activate_automations(self, guild):
+        if not self.ready or not self.bot:
+            return
+        if self.bot.intents.members:
+            if STATE.automation_channel(str(guild.id), "invites"):
+                await self.bot.refresh_invites(guild)
+        elif self.current_token:
+            # Gateway intents cannot be changed on an existing connection.
+            await self.connect(self.current_token, self.remember, member_events=True)
 
     def get_guild(self, guild_id: str):
         if not self.ready or not self.bot:
@@ -295,6 +422,8 @@ async def api_bootstrap(request):
         "csrf": CSRF,
         "online": MANAGER.ready, "connecting": bool(MANAGER.task and not MANAGER.task.done() and not MANAGER.ready),
         "error": MANAGER.error,
+        "automation_warning": MANAGER.automation_warning,
+        "member_events": bool(bot and MANAGER.ready and bot.intents.members),
         "bot": {"name": str(bot.user), "id": str(bot.user.id)} if MANAGER.ready and bot and bot.user else None,
         "guilds": guilds,
         "pinned": STATE.state["aliases"],
@@ -327,7 +456,7 @@ async def api_invite(request):
     if not MANAGER.ready or not MANAGER.bot or not MANAGER.bot.user:
         raise ValueError("Connecte d'abord le bot.")
     # No administrator permission requested.
-    permissions = discord.Permissions(manage_channels=True, manage_roles=True,
+    permissions = discord.Permissions(manage_channels=True, manage_roles=True, manage_guild=True,
                                       send_messages=True, view_channel=True,
                                       read_message_history=True)
     return web.json_response({
@@ -554,7 +683,8 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
                  ". Corrige-la en JSON avec uniquement une liste actions et des types autorisés : "
                  "create_category, create_text_channel, create_voice_channel, create_role, "
                  "rename_channel, rename_role, set_topic, send_message, make_private, "
-                 "delete_channel, delete_role. Conserve exactement la demande d'origine. "
+                 "delete_channel, delete_role, configure_welcome, configure_farewell, "
+                 "configure_invites. Conserve exactement la demande d'origine. "
                  "N'invente aucune action supplémentaire ou droit sensible. "
                  "Si tu ne peux pas la réaliser, renvoie {\"actions\":[]}."},
             ])
@@ -573,7 +703,7 @@ async def api_plan(request):
         raise ValueError("Mode d'interprétation inconnu.")
     # An explicit, understood command must go straight to a draft. Never let
     # an optional model turn it into a repeated clarification dialog.
-    actions = local_parse(prompt) or default_creation_plan(prompt)
+    actions = community_automation_plan(prompt) or local_parse(prompt) or default_creation_plan(prompt)
     used = "local"
     if not actions and mode != "local":
         models = await ollama_models()
@@ -614,7 +744,7 @@ async def run_plan(plan, guild):
         STATE.save()
         for index, item in enumerate(plan["actions"]):
             try:
-                status, detail = await execute_action(guild, item)
+                status, detail = await execute_action(guild, item, state=STATE)
                 row = {"index": index, "status": status, "detail": detail,
                        "description": description(item)}
             except discord.Forbidden:
@@ -634,6 +764,12 @@ async def run_plan(plan, guild):
         failures = sum(1 for r in plan["results"] if r["status"] == "failed")
         plan["status"] = "failed" if failures == len(plan["results"]) else "partial" if failures else "completed"
         STATE.save()
+        if any(a["type"].startswith("configure_") for a in plan["actions"]):
+            try:
+                await MANAGER.activate_automations(guild)
+            except (discord.DiscordException, OSError, aiohttp.ClientError) as exc:
+                MANAGER.automation_warning = ("Configuration enregistrée mais connexion aux événements "
+                                              f"non établie ({type(exc).__name__}). Reconnecte le bot.")
 
 
 async def api_execute(request):
