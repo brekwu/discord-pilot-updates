@@ -33,6 +33,24 @@ function Get-ExecutableHash([string]$FilePath) {
     } finally { $stream.Dispose() }
 }
 
+function Get-RunningServerVersion {
+    # Avoid Invoke-RestMethod: its Windows PowerShell module can be unavailable
+    # when the EXE inherits a PowerShell 7 PSModulePath from another launcher.
+    $request = [System.Net.WebRequest]::Create("http://127.0.0.1:$Port/api/bootstrap")
+    $request.Timeout = 1800
+    $request.Proxy = $null
+    $response = $request.GetResponse()
+    try {
+        $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
+        try { $body = $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+        if ($body -match '"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {
+            return $Matches[1]
+        }
+    } finally { $response.Dispose() }
+    return $null
+}
+
 function Start-DiscordPilot {
     # Keep the port stable so the original tab can poll /api/bootstrap and refresh.
     $env:DISCORD_PILOT_PORT = [string]$Port
@@ -86,8 +104,8 @@ try {
     $ready = $false
     for ($attempt = 1; $attempt -le 120; $attempt++) {
         try {
-            $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/bootstrap" -TimeoutSec 2 -ErrorAction Stop
-            if ($response.version -eq $TargetVersion) { $ready = $true; break }
+            $runningVersion = Get-RunningServerVersion
+            if ($runningVersion -eq $TargetVersion) { $ready = $true; break }
         } catch {}
         $newProcess.Refresh()
         if ($newProcess.HasExited) { throw 'Le nouvel EXE s est arrete avant de demarrer son serveur.' }
