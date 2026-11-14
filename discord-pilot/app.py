@@ -14,6 +14,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import webbrowser
 import wave
@@ -24,6 +25,8 @@ from aiohttp import web
 import discord
 
 from discord_ops import execute_action
+from community_modules import (MODULES, SpamTracker, normalize_module,
+                               paris_slot, public_modules, should_filter)
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
                      collapse_old_clarifications, community_automation_plan,
@@ -75,12 +78,35 @@ def update_url() -> str:
     return STATE.state.get("update_url") or DEFAULT_UPDATE_URL
 
 
+def native_module_plan(prompt: str) -> list[dict]:
+    """Only exact single-module intent is inferred; never drop other requests."""
+    phrase = norm(prompt.strip().strip(".!?"))
+    mode = re.match(r"^(?:active(?:r)?|mets en place|configure|desactive(?:r)?)\s+(.+)$", phrase)
+    if not mode:
+        return []
+    thing = mode.group(1).strip()
+    aliases = {
+        "xp": ("xp", "l xp", "l'xp", "les xp", "les niveaux", "le systeme xp", "le systeme de niveaux"),
+        "antispam": ("antispam", "l antispam", "l'antispam", "anti spam", "l anti spam", "la protection antispam"),
+        "antilinks": ("anti liens", "l anti liens", "l'anti liens", "le filtre de liens", "les liens externes"),
+    }
+    selected = next((name for name, variants in aliases.items() if thing in variants), None)
+    if not selected:
+        return []
+    enabled = "false" if phrase.startswith("desactive") else "true"
+    return validate_actions([{"type": "set_module", "module": selected, "enabled": enabled}])
+
+
 class PilotBot(discord.Client):
-    def __init__(self, manager, member_events=False):
-        super().__init__(intents=discord.Intents(guilds=True, invites=True, members=member_events))
+    def __init__(self, manager, member_events=False, content_events=False):
+        super().__init__(intents=discord.Intents(guilds=True, invites=True, members=member_events,
+                                               messages=True, reactions=True, voice_states=True,
+                                               message_content=content_events))
         self.manager = manager
         self.invite_snapshots: dict[int, dict] = {}
         self.invite_locks: dict[int, asyncio.Lock] = {}
+        self.spam_tracker = SpamTracker()
+        self.daily_task: asyncio.Task | None = None
 
     async def on_ready(self):
         self.manager.error = None
@@ -94,6 +120,174 @@ class PilotBot(discord.Client):
             for guild in self.guilds:
                 if STATE.automation_channel(str(guild.id), "invites"):
                     await self.refresh_invites(guild, bootstrap=True)
+        # A locally run bot can be shut down while a temporary voice room is
+        # still present. Reclaim only rooms explicitly created and tracked by us.
+        for guild in self.guilds:
+            rooms = STATE.state["voice_rooms"].get(str(guild.id), {})
+            for room_id in list(rooms):
+                room = guild.get_channel(int(room_id))
+                if room is None:
+                    rooms.pop(room_id, None)
+                    STATE.save()
+                elif isinstance(room, discord.VoiceChannel) and not room.members:
+                    try:
+                        await room.delete(reason="Discord Pilot : nettoyage d'un vocal temporaire vide")
+                        rooms.pop(room_id, None)
+                        STATE.save()
+                    except (discord.Forbidden, discord.HTTPException):
+                        self.manager.automation_warning = "Nettoyage des vocaux temporaires : permission manquante."
+        if not self.daily_task or self.daily_task.done():
+            self.daily_task = asyncio.create_task(self.daily_post_loop())
+
+    async def close(self):
+        if self.daily_task and not self.daily_task.done():
+            self.daily_task.cancel()
+        await super().close()
+
+    async def daily_post_loop(self):
+        while not self.is_closed():
+            try:
+                date_key, minute = paris_slot()
+                for guild in self.guilds:
+                    cfg = STATE.module(str(guild.id), "daily_post")
+                    if not cfg.get("enabled") or cfg.get("hour") != minute:
+                        continue
+                    key = f"{guild.id}:daily_post"
+                    if STATE.state["daily_sent"].get(key) == date_key:
+                        continue
+                    channel = guild.get_channel(int(cfg.get("channel_id", "0")))
+                    if not isinstance(channel, discord.TextChannel):
+                        continue
+                    await channel.send(cfg["message"], allowed_mentions=discord.AllowedMentions.none())
+                    STATE.state["daily_sent"][key] = date_key
+                    STATE.save()
+            except (discord.Forbidden, discord.HTTPException, ValueError, KeyError) as exc:
+                self.manager.automation_warning = f"Annonce quotidienne non envoyée : {type(exc).__name__}."
+            await asyncio.sleep(30)
+
+    async def on_message(self, message):
+        if message.guild is None or message.author.bot:
+            return
+        gid, uid = str(message.guild.id), str(message.author.id)
+        moderator = bool(getattr(message.author.guild_permissions, "manage_messages", False))
+        if not moderator and STATE.module(gid, "antispam").get("enabled"):
+            if self.spam_tracker.flag(message.guild.id, message.author.id):
+                await self.moderate_message(message, "Anti-spam")
+                try:
+                    if getattr(message.author.guild_permissions, "administrator", False) is False:
+                        from datetime import timedelta
+                        await message.author.timeout(timedelta(seconds=60), reason="Discord Pilot : anti-spam")
+                except (discord.Forbidden, discord.HTTPException, AttributeError, TypeError):
+                    self.manager.automation_warning = "Anti-spam : permission Exclure temporairement des membres manquante."
+                return
+        if not moderator and self.intents.message_content:
+            if should_filter(message.content, STATE.module(gid, "antilinks"), links=True):
+                await self.moderate_message(message, "Lien bloqué")
+                return
+            if should_filter(message.content, STATE.module(gid, "wordfilter")):
+                await self.moderate_message(message, "Mot filtré")
+                return
+        suggestions = STATE.module(gid, "suggestions")
+        if suggestions.get("enabled") and suggestions.get("channel_id") == str(message.channel.id):
+            try:
+                await message.add_reaction("👍")
+                await message.add_reaction("👎")
+            except (discord.Forbidden, discord.HTTPException):
+                self.manager.automation_warning = "Votes : permission Ajouter des réactions manquante."
+        xp = STATE.module(gid, "xp")
+        if xp.get("enabled"):
+            _, level, raised = STATE.record_xp(gid, uid, time.time())
+            if raised and xp.get("channel_id"):
+                await self.send_module_message(message.guild, xp["channel_id"],
+                                               f"🏆 <@{uid}> atteint le **niveau {level}** !", mention_users=True)
+
+    async def moderate_message(self, message, reason):
+        try:
+            await message.delete(reason=f"Discord Pilot : {reason}")
+        except (discord.Forbidden, discord.HTTPException):
+            self.manager.automation_warning = "Modération impossible : permission Gérer les messages manquante."
+
+    async def send_module_message(self, guild, channel_id, content, mention_users=False):
+        channel = guild.get_channel(int(channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            self.manager.automation_warning = "Salon du module introuvable."
+            return
+        try:
+            await channel.send(content, allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False, users=mention_users))
+        except (discord.Forbidden, discord.HTTPException):
+            self.manager.automation_warning = f"Le bot ne peut pas écrire dans #{channel.name}."
+
+    async def on_message_delete(self, message):
+        if not message.guild:
+            return
+        cfg = STATE.module(str(message.guild.id), "audit")
+        if cfg.get("enabled") and cfg.get("channel_id") != str(message.channel.id):
+            await self.send_module_message(message.guild, cfg["channel_id"],
+                                           f"🗑 Message supprimé dans {message.channel.mention} par "
+                                           f"{discord.utils.escape_markdown(str(message.author))} (ID {message.id}).")
+
+    async def on_message_edit(self, before, after):
+        if not before.guild or before.content == after.content:
+            return
+        cfg = STATE.module(str(before.guild.id), "audit")
+        if cfg.get("enabled") and cfg.get("channel_id") != str(before.channel.id):
+            await self.send_module_message(before.guild, cfg["channel_id"],
+                                           f"📝 Message modifié dans {before.channel.mention} "
+                                           f"par {discord.utils.escape_markdown(str(before.author))} (ID {before.id}).")
+
+    async def on_raw_reaction_add(self, payload):
+        await self.change_reaction_role(payload, add=True)
+
+    async def on_raw_reaction_remove(self, payload):
+        await self.change_reaction_role(payload, add=False)
+
+    async def change_reaction_role(self, payload, add: bool):
+        if not payload.guild_id or (self.user and payload.user_id == self.user.id):
+            return
+        cfg = STATE.module(str(payload.guild_id), "reaction_role")
+        if not cfg.get("enabled") or cfg.get("message_id") != str(payload.message_id) or cfg.get("emoji") != str(payload.emoji):
+            return
+        guild = self.get_guild(payload.guild_id)
+        if not guild:
+            return
+        role = guild.get_role(int(cfg["role_id"]))
+        if not role:
+            return
+        try:
+            member = getattr(payload, "member", None) or guild.get_member(payload.user_id)
+            if member is None:
+                member = await guild.fetch_member(payload.user_id)
+            if add:
+                await member.add_roles(role, reason="Discord Pilot : rôle par réaction")
+            else:
+                await member.remove_roles(role, reason="Discord Pilot : retrait du rôle par réaction")
+        except (discord.Forbidden, discord.HTTPException):
+            self.manager.automation_warning = "Rôle par réaction : permissions insuffisantes ou rôle trop haut."
+
+    async def on_voice_state_update(self, member, before, after):
+        gid = str(member.guild.id)
+        cfg = STATE.module(gid, "voice_rooms")
+        if not cfg.get("enabled"):
+            return
+        rooms = STATE.state["voice_rooms"].setdefault(gid, {})
+        if after.channel and str(after.channel.id) == cfg.get("lobby_id") and before.channel != after.channel:
+            try:
+                name = f"🔊 {member.display_name[:65]}"
+                channel = await member.guild.create_voice_channel(name, category=after.channel.category,
+                                                                  reason="Discord Pilot : salon temporaire")
+                rooms[str(channel.id)] = str(member.id)
+                STATE.save()
+                await member.move_to(channel, reason="Discord Pilot : salon temporaire")
+            except (discord.Forbidden, discord.HTTPException):
+                self.manager.automation_warning = "Vocaux temporaires : permissions Gérer les salons / Déplacer des membres manquantes."
+        if before.channel and str(before.channel.id) in rooms and not before.channel.members:
+            try:
+                await before.channel.delete(reason="Discord Pilot : salon temporaire vide")
+                rooms.pop(str(before.channel.id), None)
+                STATE.save()
+            except (discord.Forbidden, discord.HTTPException):
+                self.manager.automation_warning = "Impossible de supprimer un vocal temporaire vide."
 
     async def refresh_invites(self, guild, bootstrap=False):
         try:
@@ -135,6 +329,14 @@ class PilotBot(discord.Client):
                 f"Impossible d'écrire dans #{channel.name} : vérifie Voir le salon et Envoyer des messages.")
 
     async def on_member_join(self, member):
+        autorole = STATE.module(str(member.guild.id), "autorole")
+        if autorole.get("enabled"):
+            role = member.guild.get_role(int(autorole["role_id"]))
+            if role:
+                try:
+                    await member.add_roles(role, reason="Discord Pilot : rôle automatique")
+                except (discord.Forbidden, discord.HTTPException):
+                    self.manager.automation_warning = "Rôle automatique : autorisation Gérer les rôles ou hiérarchie insuffisante."
         if STATE.automation_channel(str(member.guild.id), "welcome"):
             await self.send_automation(member.guild, "welcome",
                                        f"👋 Bienvenue sur **{discord.utils.escape_markdown(member.guild.name)}**, {member.mention} !",
@@ -177,7 +379,18 @@ class BotManager:
         self.error: str | None = None
         self.automation_warning: str | None = None
 
-    async def connect(self, token: str, remember: bool, member_events: bool | None = None):
+    @staticmethod
+    def needed_intents() -> tuple[bool, bool]:
+        member = any(config for config in STATE.state.get("automations", {}).values())
+        modules = STATE.state.get("modules", {})
+        member = member or any(settings.get("autorole", {}).get("enabled")
+                               for settings in modules.values())
+        content = any(settings.get(name, {}).get("enabled")
+                      for settings in modules.values() for name in ("antilinks", "wordfilter"))
+        return bool(member), bool(content)
+
+    async def connect(self, token: str, remember: bool, member_events: bool | None = None,
+                      content_events: bool | None = None):
         if self.task and not self.task.done():
             await self.disconnect(remove_saved=False)
         self.ready = False
@@ -185,9 +398,12 @@ class BotManager:
         self.automation_warning = None
         self.remember = remember
         self.current_token = token
+        member_needed, content_needed = self.needed_intents()
         if member_events is None:
-            member_events = any(config for config in STATE.state.get("automations", {}).values())
-        self.bot = PilotBot(self, member_events=member_events)
+            member_events = member_needed
+        if content_events is None:
+            content_events = content_needed
+        self.bot = PilotBot(self, member_events=member_events, content_events=content_events)
         self.task = asyncio.create_task(self._start(self.bot, token))
 
     async def _start(self, bot, token: str):
@@ -198,15 +414,20 @@ class BotManager:
                           "ton application > Bot > Reset Token, copie le nouveau token "
                           "(pas l'Application ID ni le Client Secret).")
         except discord.PrivilegedIntentsRequired:
-            # Keep ordinary server editing operational if the privileged
-            # Members intent has not been enabled in Developer Portal.
-            if bot.intents.members:
-                self.automation_warning = ("Automatisations en attente : active Server Members "
-                                           "Intent dans Discord Developer Portal > Bot. "
-                                           "Le bot reste utilisable pour configurer les serveurs.")
+            # Preserve normal channel editing even if Discord rejects optional
+            # privileged intents. Report them as unavailable, never as active.
+            if bot.intents.members or bot.intents.message_content:
+                names = []
+                if bot.intents.members:
+                    names.append("Server Members Intent")
+                if bot.intents.message_content:
+                    names.append("Message Content Intent")
+                self.automation_warning = ("Modules dépendants des intents désactivés : active "
+                                           + " et ".join(names)
+                                           + " dans Discord Developer Portal > Bot, puis reconnecte le bot.")
                 try:
                     await bot.close()
-                    self.bot = PilotBot(self, member_events=False)
+                    self.bot = PilotBot(self, member_events=False, content_events=False)
                     await self.bot.start(token, reconnect=True)
                 except (discord.DiscordException, OSError, aiohttp.ClientError) as exc:
                     self.error = f"Connexion Discord impossible : {type(exc).__name__}."
@@ -240,12 +461,15 @@ class BotManager:
     async def activate_automations(self, guild):
         if not self.ready or not self.bot:
             return
+        member_required, content_required = self.needed_intents()
+        if (member_required and not self.bot.intents.members) or (content_required and not self.bot.intents.message_content):
+            if self.current_token:
+                await self.connect(self.current_token, self.remember,
+                                   member_events=member_required, content_events=content_required)
+            return
         if self.bot.intents.members:
             if STATE.automation_channel(str(guild.id), "invites"):
                 await self.bot.refresh_invites(guild, bootstrap=True)
-        elif self.current_token:
-            # Gateway intents cannot be changed on an existing connection.
-            await self.connect(self.current_token, self.remember, member_events=True)
 
     def get_guild(self, guild_id: str):
         if not self.ready or not self.bot:
@@ -427,6 +651,7 @@ async def api_bootstrap(request):
         "error": MANAGER.error,
         "automation_warning": MANAGER.automation_warning,
         "member_events": bool(bot and MANAGER.ready and bot.intents.members),
+        "message_content_events": bool(bot and MANAGER.ready and bot.intents.message_content),
         "bot": {"name": str(bot.user), "id": str(bot.user.id)} if MANAGER.ready and bot and bot.user else None,
         "guilds": guilds,
         "pinned": STATE.state["aliases"],
@@ -461,7 +686,9 @@ async def api_invite(request):
     # No administrator permission requested.
     permissions = discord.Permissions(manage_channels=True, manage_roles=True, manage_guild=True,
                                       send_messages=True, view_channel=True,
-                                      read_message_history=True)
+                                      read_message_history=True, add_reactions=True,
+                                      manage_messages=True, moderate_members=True,
+                                      move_members=True)
     return web.json_response({
         "url": discord.utils.oauth_url(MANAGER.bot.user.id, permissions=permissions, scopes=("bot",))
     })
@@ -497,6 +724,43 @@ async def api_alias(request):
 async def api_history(request):
     guild_id = require_id(request.match_info["guild_id"])
     return web.json_response({"plans": STATE.history(guild_id)})
+
+
+async def api_modules(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    return web.json_response({
+        "modules": public_modules(),
+        "settings": STATE.state["modules"].get(guild_id, {}),
+        "online": guild is not None,
+        "members_intent": bool(guild and MANAGER.bot.intents.members),
+        "content_intent": bool(guild and MANAGER.bot.intents.message_content),
+        "leaderboard": STATE.leaderboard(guild_id),
+        "guild_id": guild_id,
+    })
+
+
+async def api_module_update(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if guild is None:
+        raise ValueError("Connecte le bot au serveur pour configurer les modules.")
+    data = await body_json(request)
+    name = request.match_info["module"]
+    settings = normalize_module(name, data, guild)
+    STATE.set_module(guild_id, name, settings)
+    warning = None
+    if settings["enabled"] and MODULES[name].get("requires") in {"members", "content"}:
+        needed = MODULES[name]["requires"]
+        flag = MANAGER.bot.intents.members if needed == "members" else MANAGER.bot.intents.message_content
+        if not flag:
+            warning = ("L'intent privilégié doit être activé dans Discord Developer Portal > Bot. "
+                       "Discord Pilot va essayer de reconnecter le bot.")
+    if settings["enabled"] and name == "reaction_role":
+        warning = "Le rôle du bot doit être placé au-dessus du rôle à attribuer."
+    await MANAGER.activate_automations(guild)
+    return web.json_response({"ok": True, "settings": settings, "warning": warning,
+                              "note": "Configuration enregistrée ; fonctionnement seulement lorsque le bot est connecté."})
 
 
 async def api_export(request):
@@ -708,6 +972,7 @@ async def api_plan(request):
     # an optional model turn it into a repeated clarification dialog.
     external = recommended_providers(prompt)
     actions = (community_automation_plan(prompt)
+               or native_module_plan(prompt)
                or ([{"type": "suggest_integration", "provider": provider} for provider in external]
                    if external else [])
                or local_parse(prompt) or default_creation_plan(prompt))
@@ -775,6 +1040,13 @@ async def run_plan(plan, guild):
                                       "peut ensuite nécessiter son tableau de bord."),
                            "authorization_url": provider["url"],
                            "description": description(item)}
+                elif item["type"] == "set_module":
+                    previous = STATE.module(plan["guild_id"], item["module"])
+                    config = normalize_module(item["module"],
+                                              {**previous, "enabled": item["enabled"] == "true"}, guild)
+                    STATE.set_module(plan["guild_id"], item["module"], config)
+                    row = {"index": index, "status": "done", "detail": "Module configuré (actif uniquement bot connecté et permissions accordées).",
+                           "description": description(item)}
                 else:
                     status, detail = await execute_action(guild, item, state=STATE)
                     row = {"index": index, "status": status, "detail": detail,
@@ -799,7 +1071,7 @@ async def run_plan(plan, guild):
                           "partial" if failures else
                           "authorization_required" if approvals else "completed")
         STATE.save()
-        if any(a["type"].startswith("configure_") for a in plan["actions"]):
+        if any(a["type"].startswith("configure_") or a["type"] == "set_module" for a in plan["actions"]):
             try:
                 await MANAGER.activate_automations(guild)
             except (discord.DiscordException, OSError, aiohttp.ClientError) as exc:
@@ -846,6 +1118,8 @@ def build_app():
     app.router.add_get("/api/guild/{guild_id}", api_guild)
     app.router.add_post("/api/alias", api_alias)
     app.router.add_get("/api/history/{guild_id}", api_history)
+    app.router.add_get("/api/modules/{guild_id}", api_modules)
+    app.router.add_post("/api/modules/{guild_id}/{module}", api_module_update)
     app.router.add_get("/api/export/{guild_id}", api_export)
     app.router.add_get("/api/models", api_models)
     app.router.add_get("/api/catalog", api_catalog)
