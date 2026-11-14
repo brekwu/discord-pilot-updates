@@ -115,7 +115,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap") as response:
                         self.assertEqual(response.status, 200)
                         data = await response.json()
-                        self.assertEqual(data["version"], "0.4.3")
+                        self.assertEqual(data["version"], "0.4.4")
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap",
                                           headers={"Host": "example.com"}) as response:
                         self.assertEqual(response.status, 403)
@@ -129,12 +129,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post("/api/update/source", json={"url": "http://127.0.0.1/admin"}, headers=header)
         self.assertEqual(invalid.status, 400)
         status = await self.client.get("/api/update/status")
-        self.assertEqual((await status.json())["version"], "0.4.3")
+        self.assertEqual((await status.json())["version"], "0.4.4")
         form = FormData()
-        form.add_field("file", make_archive("0.4.4"), filename="discord-pilot-update.zip", content_type="application/zip")
+        form.add_field("file", make_archive("0.4.5"), filename="discord-pilot-update.zip", content_type="application/zip")
         import_response = await self.client.post("/api/update/import", data=form, headers=header)
         self.assertEqual(import_response.status, 200)
-        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.4")
+        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.5")
         previous_stop, previous_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
         old_launcher = os.environ.get("DISCORD_PILOT_LAUNCHER")
         try:
@@ -150,6 +150,52 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 os.environ.pop("DISCORD_PILOT_LAUNCHER", None)
             else:
                 os.environ["DISCORD_PILOT_LAUNCHER"] = old_launcher
+
+    async def test_windows_updater_starts_before_http_server_shuts_down(self):
+        updates = app.STATE.root / "updates"
+        updates.mkdir(parents=True, exist_ok=True)
+        (updates / "pending.json").write_text(json.dumps({
+            "version": "0.4.5", "sha256": "a" * 64, "format": "exe",
+        }), encoding="utf-8")
+        csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
+        old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
+        app.STOP_EVENT = asyncio.Event()
+        app.EXIT_FOR_UPDATE = False
+        try:
+            with patch.object(app.sys, "frozen", True, create=True), \
+                 patch.object(app, "launch_frozen_updater") as spawn:
+                response = await self.client.post("/api/update/apply", json={},
+                                                  headers={"X-Pilot-CSRF": csrf})
+                self.assertEqual(response.status, 200)
+                spawn.assert_called_once_with()
+                self.assertTrue(app.EXIT_FOR_UPDATE)
+                self.assertFalse(app.STOP_EVENT.is_set())
+                await asyncio.wait_for(app.STOP_EVENT.wait(), timeout=3)
+        finally:
+            app.STOP_EVENT, app.EXIT_FOR_UPDATE = old_stop, old_exit
+
+    async def test_failed_windows_updater_spawn_keeps_server_alive(self):
+        updates = app.STATE.root / "updates"
+        updates.mkdir(parents=True, exist_ok=True)
+        (updates / "pending.json").write_text(json.dumps({
+            "version": "0.4.5", "sha256": "a" * 64, "format": "exe",
+        }), encoding="utf-8")
+        csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
+        old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
+        app.STOP_EVENT = asyncio.Event()
+        app.EXIT_FOR_UPDATE = False
+        try:
+            with patch.object(app.sys, "frozen", True, create=True), \
+                 patch.object(app, "launch_frozen_updater", side_effect=OSError("PowerShell indisponible")):
+                response = await self.client.post("/api/update/apply", json={},
+                                                  headers={"X-Pilot-CSRF": csrf})
+                self.assertNotEqual(response.status, 200)
+                self.assertFalse(app.EXIT_FOR_UPDATE)
+                self.assertFalse(app.STOP_EVENT.is_set())
+                healthy = await self.client.get("/api/bootstrap")
+                self.assertEqual(healthy.status, 200)
+        finally:
+            app.STOP_EVENT, app.EXIT_FOR_UPDATE = old_stop, old_exit
 
 
 if __name__ == "__main__":
