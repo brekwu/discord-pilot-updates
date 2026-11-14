@@ -50,6 +50,34 @@ OPTIONAL = {
     "create_role": ("color",),
 }
 
+# Small local models frequently understand the request correctly but use a
+# Discord-style verb such as "create_channel" instead of our internal enum.
+# Normalize only equivalent operations. Unsupported features (forums, bots,
+# permission grants, automations...) must still fail closed.
+MODEL_ACTION_ALIASES = {
+    "create_channel": "create_text_channel", "add_channel": "create_text_channel",
+    "new_channel": "create_text_channel", "create_text": "create_text_channel",
+    "add_text_channel": "create_text_channel", "create_textual_channel": "create_text_channel",
+    "create_voice": "create_voice_channel", "add_voice_channel": "create_voice_channel",
+    "create_voice_room": "create_voice_channel", "create_vocal_channel": "create_voice_channel",
+    "add_category": "create_category", "new_category": "create_category",
+    "create_channel_category": "create_category",
+    "add_role": "create_role", "new_role": "create_role",
+    "update_channel_name": "rename_channel", "edit_channel_name": "rename_channel",
+    "update_role_name": "rename_role", "edit_role_name": "rename_role",
+    "edit_channel_topic": "set_topic", "set_channel_topic": "set_topic",
+    "post_message": "send_message", "send_channel_message": "send_message",
+    "private_channel": "make_private", "set_channel_private": "make_private",
+    "remove_channel": "delete_channel", "remove_role": "delete_role",
+}
+
+MODEL_FIELD_ALIASES = {
+    "channel_name": "name", "role_name": "name", "category_name": "name",
+    "old_name": "name", "target_name": "name", "parent_category": "category",
+    "new_channel_name": "new_name", "new_role_name": "new_name",
+    "message": "content", "text": "content", "description": "topic",
+}
+
 
 def compact(value: str) -> str:
     return " ".join(value.strip().split())
@@ -109,6 +137,66 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
     return verified
 
 
+def normalize_model_actions(value: Any) -> list[dict[str, str]]:
+    """Convert common model vocabulary to our strict executable allowlist.
+
+    Conversion is all-or-nothing. Unknown operations or fields cannot be
+    silently discarded, because doing so would execute an incomplete plan.
+    """
+    if not isinstance(value, list):
+        return validate_actions(value)
+    normalized = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("Chaque action de l'IA doit être un objet JSON.")
+        raw_type = item.get("type", item.get("action"))
+        if not isinstance(raw_type, str):
+            raise ValueError("L'IA n'a pas indiqué le type d'une action.")
+        raw_alias = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw_type)
+        alias = norm(raw_alias).replace("-", "_").replace(" ", "_")
+        kind = MODEL_ACTION_ALIASES.get(alias, alias)
+        if kind not in ACTION_TYPES:
+            raise ValueError(f"Action non prise en charge par Discord Pilot : « {raw_type[:65]} ».")
+        fields = {}
+        for key, value in item.items():
+            if key in {"type", "action"}:
+                continue
+            if not isinstance(key, str):
+                raise ValueError("Nom de champ d'action invalide.")
+            key = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key).lower()
+            if key == "category_name" and kind in {"create_text_channel", "create_voice_channel"}:
+                canonical = "category"
+            elif key == "role_name" and kind == "make_private":
+                canonical = "role"
+            elif key == "channel_name" and kind == "send_message":
+                canonical = "channel"
+            else:
+                canonical = MODEL_FIELD_ALIASES.get(key, key)
+            if canonical in fields and fields[canonical] != value:
+                raise ValueError(f"Deux valeurs contradictoires pour {canonical}.")
+            fields[canonical] = value
+        channel_type = fields.pop("channel_type", None)
+        if channel_type is not None:
+            if alias not in {"create_channel", "add_channel", "new_channel", "create_text_channel", "create_voice_channel"}:
+                raise ValueError("Le champ channel_type ne convient pas à cette action.")
+            if not isinstance(channel_type, str):
+                raise ValueError("Le type de salon doit être textuel ou vocal.")
+            channel_type = norm(channel_type).strip()
+            if channel_type in {"voice", "vocal", "audio", "guild_voice"}:
+                new_kind = "create_voice_channel"
+            elif channel_type in {"text", "texte", "textuel", "text_channel", "guild_text"}:
+                new_kind = "create_text_channel"
+            else:
+                raise ValueError("Ce type de salon n'est pas pris en charge (textuel ou vocal uniquement).")
+            if alias in {"create_text_channel", "create_voice_channel"} and new_kind != kind:
+                raise ValueError("Type de salon contradictoire dans la réponse de l'IA.")
+            kind = new_kind
+        if kind == "send_message" and "name" in fields and "channel" not in fields:
+            fields["channel"] = fields.pop("name")
+        normalized.append({"type": kind, **fields})
+    return validate_actions(normalized)
+
+
 def parse_ollama_response(text: str) -> list[dict[str, str]]:
     actions, _question = parse_ollama_decision(text)
     return validate_actions(actions)
@@ -124,11 +212,11 @@ def parse_ollama_decision(text: str) -> tuple[list[dict[str, str]], str | None]:
         question = result.get("question")
         actions = result.get("actions", [])
         if actions:
-            return validate_actions(actions), None
+            return normalize_model_actions(actions), None
         if isinstance(question, str) and 5 <= len(question.strip()) <= 300:
             return [], question.strip()
         return [], None
-    return validate_actions(result), None
+    return normalize_model_actions(result), None
 
 
 SYSTEM_PROMPT = """Tu es l'assistant local Discord Pilot. Tu comprends le français familier, le franglais
