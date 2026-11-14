@@ -39,7 +39,7 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer les correctifs 0.5.0 de capture audio native longue duree
+      - name: Appliquer les correctifs 0.5.0 de capture et reception audio complete
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
@@ -113,7 +113,7 @@ jobs:
               $writer.Flush()
             } finally { $stream.Dispose() }
             $speech = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/transcribe' -Method POST -ContentType 'audio/wav' -Headers @{'X-Pilot-CSRF'=$data.csrf} -InFile $wavPath -TimeoutSec 600
-            if ($speech.language -ne 'fr-FR' -or -not $speech.local -or $speech.engine -ne 'whisper-small') { throw 'Le moteur vocal local ne fonctionne pas dans l EXE.' }
+            if ($speech.language -ne 'fr-FR' -or -not $speech.local -or $speech.engine -ne 'whisper-small' -or $speech.seconds -lt 0.9) { throw 'Le moteur vocal local ne fonctionne pas dans l EXE.' }
             # Replay a REAL 3-second Opera-compatible WebM/Opus recording through
             # the compiled executable to verify that compressed audio is not cut.
             python -c "import sys; sys.path.insert(0,'buildsrc/discord-pilot'); sys.path.insert(0,'buildsrc/discord-pilot/tests'); from test_voice_webm import _WEBM; open('test-voice-opus.webm','wb').write(_WEBM)"
