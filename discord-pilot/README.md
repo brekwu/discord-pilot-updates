@@ -103,7 +103,7 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Modules natifs locaux (v0.5.5)
+### Modules natifs locaux (v0.5.6)
 
 L'onglet **Modules actifs** contient dix modules **réellement développés**,
 désactivés au départ et configurés séparément pour chaque serveur :
