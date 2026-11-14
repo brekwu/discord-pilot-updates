@@ -2,9 +2,13 @@ import asyncio
 import json
 import os
 import socket
+import sys
 import tempfile
 import unittest
+import wave
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import discord
@@ -48,6 +52,49 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         good = await self.client.post("/api/alias", json={"guild_id": "123456789012345678", "alias": "Client"},
                                       headers={"X-Pilot-CSRF": data["csrf"]})
         self.assertEqual(good.status, 200)
+
+    async def test_microphone_transcription_endpoint_and_security(self):
+        csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
+        samples = b"\0\0" * 16000
+        stream = BytesIO()
+        with wave.open(stream, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(16000)
+            audio.writeframes(samples)
+        payload = stream.getvalue()
+        refused = await self.client.post("/api/transcribe", data=payload,
+                                         headers={"Content-Type": "audio/wav"})
+        self.assertEqual(refused.status, 403)
+        headers = {"X-Pilot-CSRF": csrf, "Content-Type": "audio/wav"}
+        with patch.object(app, "transcribe_french_wav", return_value="crée un salon bienvenue") as speech:
+            response = await self.client.post("/api/transcribe", data=payload, headers=headers)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.json(), {"text": "crée un salon bienvenue", "language": "fr-FR", "local": True})
+            speech.assert_called_once_with(payload, app.STATE.root)
+        invalid_type = await self.client.post("/api/transcribe", data=payload,
+                                              headers={"X-Pilot-CSRF": csrf, "Content-Type": "application/octet-stream"})
+        self.assertEqual(invalid_type.status, 400)
+        with patch.object(app, "ensure_voice_model") as download:
+            with self.assertRaisesRegex(ValueError, "Enregistrement audio illisible"):
+                app.transcribe_french_wav(b"not-a-wav", app.STATE.root)
+            download.assert_not_called()
+        class StubRecognizer:
+            def __init__(self, model, sample_rate):
+                self.sample_rate = sample_rate
+
+            def AcceptWaveform(self, frames):
+                return False
+
+            def FinalResult(self):
+                return json.dumps({"text": "crée un salon vocal général"})
+
+        fake_vosk = SimpleNamespace(KaldiRecognizer=StubRecognizer)
+        with patch.object(app, "ensure_voice_model", return_value=Path("modele-local")), \
+             patch.object(app, "load_voice_model", return_value=object()), \
+             patch.dict(sys.modules, {"vosk": fake_vosk}):
+            self.assertEqual(app.transcribe_french_wav(payload, app.STATE.root),
+                             "crée un salon vocal général")
 
     async def test_discord_login_failure_is_reported_without_exposing_token(self):
         manager = app.BotManager()
@@ -110,7 +157,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
         self.assertEqual(response.headers.get("Cache-Control"), "no-store")
         data = await response.json()
-        self.assertEqual(data, {"discord_pilot": True, "version": "0.4.7"})
+        self.assertEqual(data, {"discord_pilot": True, "version": "0.4.8"})
         refused = await self.client.get("/api/health", headers={"Origin": "https://malicious.example"})
         self.assertEqual(refused.status, 200)
         self.assertNotIn("Access-Control-Allow-Origin", refused.headers)
@@ -134,7 +181,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap") as response:
                         self.assertEqual(response.status, 200)
                         data = await response.json()
-                        self.assertEqual(data["version"], "0.4.7")
+                        self.assertEqual(data["version"], "0.4.8")
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap",
                                           headers={"Host": "example.com"}) as response:
                         self.assertEqual(response.status, 403)
@@ -148,12 +195,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post("/api/update/source", json={"url": "http://127.0.0.1/admin"}, headers=header)
         self.assertEqual(invalid.status, 400)
         status = await self.client.get("/api/update/status")
-        self.assertEqual((await status.json())["version"], "0.4.7")
+        self.assertEqual((await status.json())["version"], "0.4.8")
         form = FormData()
-        form.add_field("file", make_archive("0.4.8"), filename="discord-pilot-update.zip", content_type="application/zip")
+        form.add_field("file", make_archive("0.4.9"), filename="discord-pilot-update.zip", content_type="application/zip")
         import_response = await self.client.post("/api/update/import", data=form, headers=header)
         self.assertEqual(import_response.status, 200)
-        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.8")
+        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.9")
         previous_stop, previous_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
         old_launcher = os.environ.get("DISCORD_PILOT_LAUNCHER")
         try:
@@ -174,7 +221,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         updates = app.STATE.root / "updates"
         updates.mkdir(parents=True, exist_ok=True)
         (updates / "pending.json").write_text(json.dumps({
-            "version": "0.4.8", "sha256": "a" * 64, "format": "exe",
+            "version": "0.4.9", "sha256": "a" * 64, "format": "exe",
         }), encoding="utf-8")
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
         old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
