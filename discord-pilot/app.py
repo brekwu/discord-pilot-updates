@@ -22,7 +22,8 @@ import discord
 
 from discord_ops import execute_action
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
-                     local_parse, missing_information, norm, parse_ollama_decision,
+                     collapse_old_clarifications, default_creation_plan, local_parse,
+                     norm, parse_ollama_decision,
                      validate_actions)
 from storage import State, load_token, remove_token, save_token
 from updater import (MAX_EXE_SIZE, MAX_ZIP_SIZE, RESTART_UPDATE_CODE, inspect_manifest,
@@ -435,34 +436,32 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
 async def api_plan(request):
     data = await body_json(request)
     guild_id = require_id(data.get("guild_id"))
-    prompt = data.get("prompt", "")
-    if not isinstance(prompt, str) or not 3 <= len(prompt.strip()) <= 4000:
+    raw_prompt = data.get("prompt", "")
+    if not isinstance(raw_prompt, str) or not 3 <= len(raw_prompt.strip()) <= 4000:
         raise ValueError("Décris ta demande (3 à 4 000 caractères).")
+    prompt = collapse_old_clarifications(raw_prompt)
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
         raise ValueError("Mode d'interprétation inconnu.")
-    question = missing_information(prompt)
-    if question:
-        return web.json_response({"needs_clarification": True, "question": question, "original_prompt": prompt.strip()})
-    models = await ollama_models() if mode != "local" else []
-    if mode == "ollama" and not models:
-        raise ValueError("Ollama n'est pas démarré ou aucun modèle n'est installé.")
-    if models:
-        chosen = data.get("model") or models[0]
-        if chosen not in models:
-            raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
-        try:
-            actions, question = await ollama_plan(prompt, chosen)
-            used = f"ollama:{chosen}"
-        except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
-    else:
-        actions = local_parse(prompt)
-        used = "local"
-    if question:
-        return web.json_response({"needs_clarification": True, "question": question, "original_prompt": prompt.strip()})
+    # An explicit, understood command must go straight to a draft. Never let
+    # an optional model turn it into a repeated clarification dialog.
+    actions = local_parse(prompt) or default_creation_plan(prompt)
+    used = "local"
+    if not actions and mode != "local":
+        models = await ollama_models()
+        if mode == "ollama" and not models:
+            raise ValueError("Ollama n'est pas démarré ou aucun modèle n'est installé.")
+        if models:
+            chosen = data.get("model") or models[0]
+            if chosen not in models:
+                raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
+            try:
+                actions, _question = await ollama_plan(prompt, chosen)
+                used = f"ollama:{chosen}"
+            except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
     if not actions:
-        raise ValueError("Cette demande n'est pas comprise. Essaie « Rajoute un channel annonces », « Crée un rôle Membre » ou donne des noms plus précis.")
+        raise ValueError("Je ne peux pas proposer d'action sûre pour cette demande. Décris les changements souhaités en une phrase (par exemple « Crée deux salons bienvenue et au-revoir »).")
     if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used)
