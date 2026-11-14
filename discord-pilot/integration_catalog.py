@@ -95,7 +95,8 @@ FEATURE_PROVIDERS = {
 # This is not an estimate of how many catalogue ideas are complete.
 FEATURE_NATIVE = {
     11: "xp", 13: "xp", 14: "xp", 27: "antispam",
-    30: "wordfilter", 35: "audit",
+    30: "wordfilter", 35: "audit", 55: "giveaway",
+    57: "poll", 83: "tickets",
 }
 
 
