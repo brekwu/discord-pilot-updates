@@ -154,8 +154,8 @@ jobs:
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
 
             $restarted = $false
-            for ($n = 0; $n -lt 120; $n++) {
-              Start-Sleep -Seconds 2
+            for ($n = 0; $n -lt 90; $n++) {
+              Start-Sleep -Seconds 1
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
                 $logPath = Join-Path $dataRoot 'updater.log'
@@ -167,6 +167,12 @@ jobs:
                   break
                 }
               } catch {}
+              $logPath = Join-Path $dataRoot 'updater.log'
+              if ((Test-Path $logPath) -and
+                  (Select-String -Path $logPath -Pattern 'ERREUR :' -Quiet)) {
+                Get-Content $logPath
+                throw 'L outil de mise a jour a signale une erreur pendant son execution.'
+              }
             }
             if (-not $restarted) {
               if (Test-Path (Join-Path $dataRoot 'updater.log')) {
