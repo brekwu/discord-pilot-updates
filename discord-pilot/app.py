@@ -92,6 +92,9 @@ def native_module_plan(prompt: str) -> list[dict]:
         "xp": ("xp", "l xp", "l'xp", "les xp", "les niveaux", "le systeme xp", "le systeme de niveaux"),
         "antispam": ("antispam", "l antispam", "l'antispam", "anti spam", "l anti spam", "la protection antispam"),
         "antilinks": ("anti liens", "l anti liens", "l'anti liens", "le filtre de liens", "les liens externes"),
+        "activity_stats": ("les statistiques", "statistiques", "les stats", "stats", "les statistiques d activite",
+                           "les stats d activite", "le classement des messages",
+                           "les statistiques des messages", "les stats de messages"),
     }
     selected = next((name for name, variants in aliases.items() if thing in variants), None)
     if not selected:
@@ -1512,13 +1515,15 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
                 actions, question = parse_ollama_decision(answer)
                 if actions:
                     return actions, None
-                problem = ("Une demande de précisions ne constitue pas un plan."
-                           if question else "Le modèle n'a proposé aucune action.")
+                problem = ("Le modèle a demandé une précision au lieu de proposer un plan."
+                           if question else "Le modèle a répondu sans proposer d'action exécutable.")
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 problem = str(exc)
             if attempt == 1:
-                raise ValueError("Le modèle IA n'a pas réussi à produire un plan compatible : "
-                                 f"{problem} Aucune modification n'a été effectuée.")
+                raise ValueError("Impossible de créer un plan vérifiable avec ce modèle IA : "
+                                 f"{problem} Essaie une demande précise comme « Crée un salon annonces ». "
+                                 "Pour les récompenses, tickets et autres modules avancés, "
+                                 "utilise l'onglet Modules actifs. Aucune modification n'a été effectuée.")
             # One internal formatting repair, no clarification loop shown to
             # the user. The exact allowlist remains enforced by the parser.
             messages.extend([
@@ -1529,7 +1534,9 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
                  "create_category, create_text_channel, create_voice_channel, create_role, "
                  "rename_channel, rename_role, set_topic, send_message, make_private, "
                  "delete_channel, delete_role, configure_welcome, configure_farewell, "
-                 "configure_invites. Conserve exactement la demande d'origine. "
+                 "configure_invites, set_module. Exemple : "
+                 "{\"actions\":[{\"type\":\"create_text_channel\",\"name\":\"annonces\"}]}. "
+                 "Conserve exactement la demande d'origine. "
                  "N'invente aucune action supplémentaire ou droit sensible. "
                  "Si tu ne peux pas la réaliser, renvoie {\"actions\":[]}."},
             ])
