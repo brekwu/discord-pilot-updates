@@ -23,7 +23,7 @@ jobs:
       - name: Télécharger les sources de la version
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.0/DiscordPilot_Source.zip' -OutFile 'sources.zip'
+          Invoke-WebRequest -Uri 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.1/DiscordPilot_Source.zip' -OutFile 'sources.zip'
           Expand-Archive -LiteralPath 'sources.zip' -DestinationPath 'buildsrc'
           if (-not (Test-Path 'buildsrc/discord-pilot/windows_entrypoint.py')) { throw 'Entrée Windows introuvable' }
 
@@ -53,7 +53,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.0' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.1' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -66,8 +66,36 @@ jobs:
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Tester le lancement avec le port 8765 occupe
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'buildsrc/discord-pilot/dist/DiscordPilot.exe'
+          $env:DISCORD_PILOT_NO_BROWSER = '1'
+          $env:LOCALAPPDATA = Join-Path $PWD 'test-port-occupied-state'
+          New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 8765)
+          $listener.Start()
+          $p = $null
+          try {
+            $p = Start-Process -FilePath $exe -PassThru
+            $ready = $false
+            for ($n = 0; $n -lt 60; $n++) {
+              Start-Sleep -Seconds 2
+              try {
+                $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8766/api/bootstrap' -TimeoutSec 2
+                if ($data.version -eq '0.4.1' -and $data.online -eq $false) { $ready = $true; break }
+              } catch {}
+              if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
+            }
+            if (-not $ready) { throw 'Le port 8766 ne repond pas apres lancement.' }
+            Write-Host 'REGRESSION WINDOWS OK : port 8765 occupe, app fonctionnelle sur 8766.'
+          } finally {
+            if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+            $listener.Stop()
+          }
+
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.4.0
+          name: DiscordPilot_EXE_Windows_v0.4.1
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
