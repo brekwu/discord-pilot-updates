@@ -84,7 +84,25 @@ async function testFullMicrophoneLifecycle() {
     requestText: {value: "", maxLength: 8000, dispatchEvent() {}},
   };
   let sent = null;
+  let decodedBytes = 0;
   const stream = {getTracks: () => [{stop() {}}]};
+  class AudioContextMock {
+    async decodeAudioData(bytes) {
+      decodedBytes = bytes.byteLength;
+      return {duration: 5};
+    }
+    async close() {}
+  }
+  class OfflineAudioContextMock {
+    constructor(channels, length, rate) {
+      assert.equal(channels, 1);
+      assert.equal(rate, 16000);
+      this.length = length;
+      this.destination = {};
+    }
+    createBufferSource() {return {connect() {}, start() {}};}
+    async startRendering() {return {getChannelData: () => new Float32Array(this.length).fill(0.2)};}
+  }
   class Recorder {
     static isTypeSupported(type) {return type === "audio/webm;codecs=opus";}
     constructor(_stream, options) {this.mimeType = options.mimeType; this.state = "inactive"; this.listeners = {};}
@@ -100,9 +118,9 @@ async function testFullMicrophoneLifecycle() {
   const ctx = {
     document: {getElementById: id => elements[id]},
     localStorage: {getItem: () => ""},
-    window: {MediaRecorder: Recorder},
+    window: {MediaRecorder: Recorder, AudioContext: AudioContextMock, OfflineAudioContext: OfflineAudioContextMock},
     navigator: {mediaDevices: {getUserMedia: async () => stream}},
-    Blob, Event,
+    Blob, Event, ArrayBuffer, DataView,
     URL: {createObjectURL: () => "blob:recorded", revokeObjectURL() {}},
     setTimeout, clearTimeout, setInterval, clearInterval,
     fetch: async (path, options) => {
@@ -115,8 +133,13 @@ async function testFullMicrophoneLifecycle() {
   vm.runInContext(source, ctx, {filename: "web/app.js"});
   await vm.runInContext("beginVoiceRecording()", ctx);
   await vm.runInContext("finishVoiceRecording()", ctx);
-  assert.equal(sent.body.size, 4500, "final recorded chunk must reach the server");
-  assert.equal(sent.headers["Content-Type"], "audio/webm;codecs=opus");
+  assert.equal(decodedBytes, 4500, "browser decoding must receive all chunks including the final chunk");
+  assert.equal(sent.body.size, 160044, "entire 5-second audio must be converted to PCM WAV");
+  assert.equal(sent.headers["Content-Type"], "audio/wav");
+  const wav = new DataView(await sent.body.arrayBuffer());
+  assert.equal(wav.getUint32(24, true), 16000, "PCM WAV sample rate");
+  assert.equal(wav.getUint32(40, true), 160000, "PCM WAV length");
+  assert.equal(wav.getInt16(44, true), 6553, "sample conversion");
   assert.equal(elements.requestText.value, "je veux créer un salon puis un deuxième");
   assert.equal(elements.voicePreview.hidden, false, "the user should be able to replay audio");
 }
