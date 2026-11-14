@@ -39,7 +39,7 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer les correctifs 0.5.0 avec decodeurs Opera dans l EXE
+      - name: Appliquer les correctifs 0.5.0 avec capture et conversion Opera fiable
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
@@ -94,10 +94,11 @@ jobs:
             if ($page.StatusCode -ne 200 -or $asset.StatusCode -ne 200) { throw 'Interface locale incomplète.' }
             if ($page.Content -notmatch 'voiceButton') { throw 'Bouton microphone absent de l interface Windows.' }
             if ($page.Content -notmatch 'voicePreview') { throw 'Lecteur de verification des vocaux absent.' }
-            # Validate WAV format and first-use model provisioning in the compiled EXE.
+            # Validate the complete 8-second WAV payload, from Opera conversion
+            # through HTTP and the Whisper model in the actual compiled EXE.
             $wavPath = Join-Path $PWD 'test-voice-silence.wav'
-            $pcm = New-Object byte[] (16000 * 2)
-            for ($i = 0; $i -lt 16000; $i++) { $pcm[$i * 2] = 0; $pcm[$i * 2 + 1] = 16 }
+            $pcm = New-Object byte[] (16000 * 2 * 8)
+            for ($i = 0; $i -lt (16000 * 8); $i++) { $pcm[$i * 2] = 0; $pcm[$i * 2 + 1] = 16 }
             $stream = [System.IO.File]::Create($wavPath)
             try {
               $writer = [System.IO.BinaryWriter]::new($stream)
@@ -113,13 +114,8 @@ jobs:
               $writer.Flush()
             } finally { $stream.Dispose() }
             $speech = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/transcribe' -Method POST -ContentType 'audio/wav' -Headers @{'X-Pilot-CSRF'=$data.csrf} -InFile $wavPath -TimeoutSec 600
-            if ($speech.language -ne 'fr-FR' -or -not $speech.local -or $speech.engine -ne 'whisper-small' -or $speech.seconds -lt 0.9) { throw 'Le moteur vocal local ne fonctionne pas dans l EXE.' }
-            # Replay a REAL 3-second Opera-compatible WebM/Opus recording through
-            # the compiled executable to verify that compressed audio is not cut.
-            python -c "import sys; sys.path.insert(0,'buildsrc/discord-pilot'); sys.path.insert(0,'buildsrc/discord-pilot/tests'); from test_voice_webm import _WEBM; open('test-voice-opus.webm','wb').write(_WEBM)"
-            $opus = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/transcribe' -Method POST -ContentType 'audio/webm' -Headers @{'X-Pilot-CSRF'=$data.csrf} -InFile 'test-voice-opus.webm' -TimeoutSec 180
-            if ($opus.seconds -lt 2.8 -or $opus.seconds -gt 3.2 -or $opus.engine -ne 'whisper-small') { throw 'Le flux Opera WebM/Opus est tronque ou mal decode.' }
-            Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur, Whisper Small, WebM/Opus complet, lecture et interface.'
+            if ($speech.language -ne 'fr-FR' -or -not $speech.local -or $speech.engine -ne 'whisper-small' -or $speech.seconds -lt 7.9 -or $speech.seconds -gt 8.1) { throw 'Le moteur vocal local a tronque le WAV de huit secondes dans l EXE.' }
+            Write-Host 'SMOKE TEST WINDOWS OK : EXE, serveur, Whisper Small, WAV complet de huit secondes, lecture et interface.'
           } finally {
             try { & taskkill.exe /T /F /PID $p.Id *> $null } catch {}
           }
@@ -267,7 +263,7 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Dictée vocale réécrite : capture native MediaRecorder du navigateur pour conserver tout le vocal même en arrière-plan, et modèle Whisper Small multilingue (~500 Mo) beaucoup plus précis. Durée maximale cinq minutes, réécoute du vocal enregistré avant traitement, affichage de la durée audio effectivement décodée, diagnostic des coupures et du micro muet, support WebM/Opus Opera et WAV. Sans cle API, modèle téléchargé automatiquement, transcription en local. Tests Windows sur exe et décodage réel de trois secondes WebM/Opus, redémarrage après MAJ.'
+          $notes = 'Dictee vocale reeecrite : capture native MediaRecorder meme en arriere-plan, conversion du vocal complet par Opera en WAV PCM avant envoi pour eviter les problemes de decodeur dans l EXE. Modele Whisper Small multilingue (~500 Mo) beaucoup plus precis. Duree maximale cinq minutes, reecoute du vocal, verification de la duree transcrite, diagnostic des coupures et du micro. Sans cle API, modele telecharge automatiquement, transcription locale. Tests Windows sur EXE, huit secondes de WAV sans troncature et redemarrage apres MAJ.'
           $tag = 'v0.5.0'
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
