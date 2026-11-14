@@ -62,8 +62,28 @@ async function simulateUpdate({portChanged}) {
   }
 }
 
+async function testVoiceWav() {
+  const ctx = {document: {}, localStorage: {getItem: () => ""}, Blob};
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, {filename: "web/app.js"});
+  // Voice recorder writes a standard signed PCM WAV that Vosk can read.
+  const blob = vm.runInContext("voiceWav([new Float32Array(48000).fill(0.25)], 48000)", ctx);
+  assert.equal(blob.type, "audio/wav");
+  const bytes = await blob.arrayBuffer();
+  const view = new DataView(bytes);
+  const ascii = (offset, count) => Buffer.from(bytes, offset, count).toString("ascii");
+  assert.equal(ascii(0, 4), "RIFF");
+  assert.equal(ascii(8, 4), "WAVE");
+  assert.equal(view.getUint16(22, true), 1, "must be mono");
+  assert.equal(view.getUint32(24, true), 16000, "must be 16 kHz");
+  assert.equal(view.getUint16(34, true), 16, "must be 16-bit PCM");
+  assert.equal(blob.size, 44 + 16000 * 2, "48 kHz one-second input must resample to 16k");
+  assert.ok(view.getInt16(44, true) > 8000, "resampled audio must contain microphone samples");
+}
+
 (async () => {
+  await testVoiceWav();
   await simulateUpdate({portChanged: false});
   await simulateUpdate({portChanged: true});
-  process.stdout.write("Frontend update tests OK: restart, asset availability, port recovery.\n");
+  process.stdout.write("Frontend tests OK: microphone WAV, restart, asset availability, port recovery.\n");
 })().catch(error => {console.error(error); process.exitCode = 1;});
