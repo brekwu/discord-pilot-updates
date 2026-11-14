@@ -66,17 +66,24 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                                          headers={"Content-Type": "audio/wav"})
         self.assertEqual(refused.status, 403)
         headers = {"X-Pilot-CSRF": csrf, "Content-Type": "audio/wav"}
-        with patch.object(app, "transcribe_french_wav", return_value="crée un salon bienvenue") as speech:
+        expected = {"text": "crée un salon bienvenue", "seconds": 1.0, "segments": 1, "engine": "whisper-small"}
+        with patch.object(app, "transcribe_voice_audio", return_value=expected) as speech:
             response = await self.client.post("/api/transcribe", data=payload, headers=headers)
             self.assertEqual(response.status, 200)
-            self.assertEqual(await response.json(), {"text": "crée un salon bienvenue", "language": "fr-FR", "local": True})
-            speech.assert_called_once_with(payload, app.STATE.root)
+            self.assertEqual(await response.json(), {**expected, "language": "fr-FR", "local": True})
+            speech.assert_called_once_with(payload, app.STATE.root, "audio/wav")
+        with patch.object(app, "transcribe_voice_audio", return_value=expected) as compressed:
+            encoded = b"webm content placeholder"
+            response = await self.client.post("/api/transcribe", data=encoded,
+                                              headers={"X-Pilot-CSRF": csrf, "Content-Type": "audio/webm;codecs=opus"})
+            self.assertEqual(response.status, 200)
+            compressed.assert_called_once_with(encoded, app.STATE.root, "audio/webm")
         invalid_type = await self.client.post("/api/transcribe", data=payload,
                                               headers={"X-Pilot-CSRF": csrf, "Content-Type": "application/octet-stream"})
         self.assertEqual(invalid_type.status, 400)
         with patch.object(app, "load_voice_model") as download:
             with self.assertRaisesRegex(ValueError, "Enregistrement audio illisible"):
-                app.transcribe_french_wav(b"not-a-wav", app.STATE.root)
+                app.transcribe_voice_audio(b"not-a-wav", app.STATE.root, "audio/wav")
             download.assert_not_called()
         class StubWhisper:
             def transcribe(self, wave_samples, **kwargs):
@@ -86,8 +93,9 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
         stub_model = StubWhisper()
         with patch.object(app, "load_voice_model", return_value=stub_model) as loading:
-            self.assertEqual(app.transcribe_french_wav(payload, app.STATE.root),
-                             "crée un salon vocal général")
+            self.assertEqual(app.transcribe_voice_audio(payload, app.STATE.root, "audio/wav"),
+                             {"text": "crée un salon vocal général", "seconds": 1.0,
+                              "segments": 1, "engine": "whisper-small"})
             loading.assert_called_once_with(str(app.STATE.root))
             self.assertEqual(stub_model.sample_rate, 16000)
             self.assertEqual(stub_model.options["language"], "fr")
@@ -153,7 +161,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
         self.assertEqual(response.headers.get("Cache-Control"), "no-store")
         data = await response.json()
-        self.assertEqual(data, {"discord_pilot": True, "version": "0.4.9"})
+        self.assertEqual(data, {"discord_pilot": True, "version": "0.5.0"})
         refused = await self.client.get("/api/health", headers={"Origin": "https://malicious.example"})
         self.assertEqual(refused.status, 200)
         self.assertNotIn("Access-Control-Allow-Origin", refused.headers)
@@ -177,7 +185,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap") as response:
                         self.assertEqual(response.status, 200)
                         data = await response.json()
-                        self.assertEqual(data["version"], "0.4.9")
+                        self.assertEqual(data["version"], "0.5.0")
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap",
                                           headers={"Host": "example.com"}) as response:
                         self.assertEqual(response.status, 403)
@@ -191,12 +199,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post("/api/update/source", json={"url": "http://127.0.0.1/admin"}, headers=header)
         self.assertEqual(invalid.status, 400)
         status = await self.client.get("/api/update/status")
-        self.assertEqual((await status.json())["version"], "0.4.9")
+        self.assertEqual((await status.json())["version"], "0.5.0")
         form = FormData()
-        form.add_field("file", make_archive("0.4.10"), filename="discord-pilot-update.zip", content_type="application/zip")
+        form.add_field("file", make_archive("0.5.1"), filename="discord-pilot-update.zip", content_type="application/zip")
         import_response = await self.client.post("/api/update/import", data=form, headers=header)
         self.assertEqual(import_response.status, 200)
-        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.10")
+        self.assertEqual((await import_response.json())["pending"]["version"], "0.5.1")
         previous_stop, previous_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
         old_launcher = os.environ.get("DISCORD_PILOT_LAUNCHER")
         try:
@@ -217,7 +225,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         updates = app.STATE.root / "updates"
         updates.mkdir(parents=True, exist_ok=True)
         (updates / "pending.json").write_text(json.dumps({
-            "version": "0.4.9", "sha256": "a" * 64, "format": "exe",
+            "version": "0.5.0", "sha256": "a" * 64, "format": "exe",
         }), encoding="utf-8")
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
         old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
@@ -240,7 +248,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         updates = app.STATE.root / "updates"
         updates.mkdir(parents=True, exist_ok=True)
         (updates / "pending.json").write_text(json.dumps({
-            "version": "0.4.10", "sha256": "a" * 64, "format": "exe",
+            "version": "0.5.1", "sha256": "a" * 64, "format": "exe",
         }), encoding="utf-8")
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
         old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
