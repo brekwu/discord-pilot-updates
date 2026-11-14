@@ -71,7 +71,7 @@ class ModuleLogicTests(unittest.TestCase):
 
     def test_every_module_opt_in_and_strict_config(self):
         guild = FakeGuild()
-        self.assertEqual(len(MODULES), 13)
+        self.assertEqual(len(MODULES), 17)
         self.assertEqual(normalize_module("autorole", {"enabled": True, "role_id": RID}, guild),
                          {"enabled": True, "role_id": RID})
         self.assertEqual(normalize_module("audit", {"enabled": True, "channel_id": CID}, guild)["channel_id"], CID)
@@ -85,6 +85,12 @@ class ModuleLogicTests(unittest.TestCase):
                          {"enabled": True, "staff_channel_id": CID, "staff_role_id": ""})
         self.assertEqual(normalize_module("applications", {"enabled": True, "panel_channel_id": CID,
                                                            "staff_channel_id": CID}, guild)["staff_channel_id"], CID)
+        self.assertEqual(normalize_module("level_rewards", {"enabled": True, "role_id": RID,
+                                                           "level": "5"}, guild)["level"], "5")
+        self.assertEqual(normalize_module("invite_rewards", {"enabled": True, "role_id": RID,
+                                                            "invites": "11"}, guild)["invites"], "11")
+        self.assertEqual(normalize_module("activity_stats", {"enabled": True}, guild), {"enabled": True})
+        self.assertEqual(normalize_module("warnings", {"enabled": True, "channel_id": CID}, guild)["channel_id"], CID)
         for name, config in [
             ("fake_module", {"enabled": True}),
             ("xp", {"enabled": "yes"}),
@@ -96,6 +102,11 @@ class ModuleLogicTests(unittest.TestCase):
             ("tickets", {"enabled": True, "panel_channel_id": CID, "category_id": CID}),
             ("daily_post", {"enabled": True, "channel_id": CID, "hour": "25:99", "message": "bonjour"}),
             ("wordfilter", {"enabled": True, "words": ""}),
+            ("level_rewards", {"enabled": True, "role_id": RID, "level": "0"}),
+            ("level_rewards", {"enabled": True, "role_id": RID, "level": "1.5"}),
+            ("invite_rewards", {"enabled": True, "role_id": RID, "invites": "1001"}),
+            ("invite_rewards", {"enabled": True, "role_id": CID, "invites": "5"}),
+            ("warnings", {"enabled": True, "channel_id": VID}),
         ]:
             with self.subTest(name=name, config=config), self.assertRaises(ValueError):
                 normalize_module(name, config, guild)
@@ -138,6 +149,21 @@ class ModuleLogicTests(unittest.TestCase):
         self.assertEqual(paris_slot(datetime.fromisoformat("2026-11-14T08:15:00+00:00")),
                          ("2026-11-14", "09:15"))
 
+    def test_activity_invites_warning_counts_and_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = State(Path(directory))
+            self.assertEqual(state.record_message_stat(GID, RID), 1)
+            self.assertEqual(state.record_message_stat(GID, RID), 2)
+            self.assertEqual(state.increment_invites(GID, RID), 1)
+            self.assertEqual(state.increment_invites(GID, RID), 2)
+            self.assertEqual(state.add_warning(GID, RID, "Respecter le règlement")["count"], 1)
+            self.assertEqual(state.add_warning(GID, RID, "Deuxième rappel")["count"], 2)
+            loaded = State(Path(directory))
+            self.assertEqual(loaded.activity_leaderboard(GID), [{"member_id": RID, "messages": 2}])
+            self.assertEqual(loaded.invite_leaderboard(GID), [{"member_id": RID, "invites": 2}])
+            self.assertEqual(loaded.state["warning_totals"][GID][RID], 2)
+            self.assertNotIn("content", loaded.state["message_stats"][GID])
+
 
 class ModuleHttpTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -161,7 +187,10 @@ class ModuleHttpTests(unittest.IsolatedAsyncioTestCase):
         result = await self.client.get(f"/api/modules/{GID}")
         self.assertEqual(result.status, 200)
         data = await result.json()
-        self.assertEqual(len(data["modules"]), 13)
+        self.assertEqual(len(data["modules"]), 17)
+        self.assertEqual(data["invite_leaderboard"], [])
+        self.assertEqual(data["activity_leaderboard"], [])
+        self.assertEqual(data["warnings"], [])
         self.assertFalse(data["online"])
         self.assertEqual(data["settings"], {})
         self.assertEqual((await self.client.post(f"/api/modules/{GID}/xp", json={"enabled": True})).status, 403)
@@ -180,6 +209,32 @@ class ModuleHttpTests(unittest.IsolatedAsyncioTestCase):
                                          json={"enabled": True, "role_id": VID}, headers=self.headers)
             self.assertEqual(bad.status, 400)
             self.assertEqual(app.STATE.module(GID, "autorole"), {})
+
+    async def test_warn_requires_opt_in_real_member_private_channel_and_csrf(self):
+        guild = FakeGuild()
+        member = SimpleNamespace(display_name="Utilisateur")
+        guild.get_member = lambda member_id: member if member_id == int(RID) else None
+        guild.fetch_member = AsyncMock(side_effect=discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Absent"))
+        guild.text.send = AsyncMock()
+        endpoint = f"/api/community/{GID}/warn"
+        data = {"member_id": RID, "reason": "Rappel du règlement"}
+        self.assertEqual((await self.client.post(endpoint, json=data)).status, 403)
+        with patch.object(app.MANAGER, "get_guild", return_value=guild), \
+             patch.object(app.discord, "TextChannel", FakeChannel):
+            self.assertEqual((await self.client.post(endpoint, json=data, headers=self.headers)).status, 400)
+            app.STATE.set_module(GID, "warnings", {"enabled": True, "channel_id": CID})
+            bad = await self.client.post(endpoint, json={"member_id": RID, "reason": "x"}, headers=self.headers)
+            self.assertEqual(bad.status, 400)
+            self.assertEqual(app.STATE.state["warnings"], {})
+            guild.text.send.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Non")
+            self.assertEqual((await self.client.post(endpoint, json=data, headers=self.headers)).status, 400)
+            self.assertEqual(app.STATE.state["warnings"], {})
+            guild.text.send.side_effect = None
+            result = await self.client.post(endpoint, json=data, headers=self.headers)
+            self.assertEqual(result.status, 200)
+            self.assertEqual((await result.json())["warning"]["count"], 1)
+            self.assertEqual(app.STATE.state["warning_totals"][GID][RID], 1)
+            guild.text.send.assert_awaited()
 
 
 class ModuleEventTests(unittest.IsolatedAsyncioTestCase):
@@ -243,6 +298,36 @@ class ModuleEventTests(unittest.IsolatedAsyncioTestCase):
             payload.emoji = "❌"
             await self.bot.on_raw_reaction_add(payload)
             self.assertEqual(member.add_roles.await_count, 1)
+
+    async def test_level_reward_after_threshold_without_duplicate_role(self):
+        app.STATE.set_module(GID, "xp", {"enabled": True, "channel_id": ""})
+        app.STATE.set_module(GID, "level_rewards", {"enabled": True, "role_id": RID, "level": "1"})
+        role = FakeRole()
+        guild = SimpleNamespace(id=int(GID), get_role=lambda rid: role if rid == int(RID) else None)
+        member = SimpleNamespace(id=int(RID), bot=False, roles=[], add_roles=AsyncMock(),
+                                 guild_permissions=SimpleNamespace(manage_messages=False))
+        message = SimpleNamespace(guild=guild, author=member, content="bonjour", channel=SimpleNamespace(id=int(CID)))
+        app.STATE.state["xp_stats"][GID] = {RID: {"xp": 50, "last_at": 100}}
+        with patch.object(app.time, "time", return_value=500):
+            await self.bot.on_message(message)
+        member.add_roles.assert_awaited_once_with(role, reason="Discord Pilot : récompense niveau XP")
+        member.roles.append(role)
+        with patch.object(app.time, "time", return_value=600):
+            await self.bot.on_message(message)
+        self.assertEqual(member.add_roles.await_count, 1)
+
+    async def test_invite_reward_when_inviter_is_identifiable(self):
+        app.STATE.set_module(GID, "invite_rewards", {"enabled": True, "role_id": RID, "invites": "1"})
+        inviter = SimpleNamespace(id=int(RID), roles=[], add_roles=AsyncMock())
+        role = FakeRole()
+        guild = SimpleNamespace(id=int(GID), get_member=lambda uid: inviter if uid == int(RID) else None,
+                                get_role=lambda uid: role if uid == int(RID) else None)
+        joined = SimpleNamespace(guild=guild, id=987654321012345678)
+        self.bot.invite_snapshots[int(GID)] = {"abc": (0, int(RID))}
+        with patch.object(self.bot, "refresh_invites", new_callable=AsyncMock, return_value={"abc": (1, int(RID))}):
+            await self.bot.on_member_join(joined)
+        inviter.add_roles.assert_awaited_once_with(role, reason="Discord Pilot : récompense d'invitations")
+        self.assertEqual(app.STATE.invite_leaderboard(GID)[0]["invites"], 1)
 
 
 if __name__ == "__main__":
