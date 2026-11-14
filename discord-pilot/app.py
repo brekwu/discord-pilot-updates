@@ -168,14 +168,30 @@ async def error_to_json(request, handler):
 
 
 async def home(request):
-    return web.FileResponse(BASE / "web" / "index.html")
+    return web.FileResponse(BASE / "web" / "index.html", headers={"Cache-Control": "no-store"})
 
 
 async def asset(request):
     name = request.match_info["name"]
     if name not in {"app.js", "style.css", "updates.css"}:
         raise web.HTTPNotFound()
-    return web.FileResponse(BASE / "web" / name)
+    return web.FileResponse(BASE / "web" / name, headers={"Cache-Control": "no-store"})
+
+
+async def api_health(request):
+    """Tiny loopback-only probe so a tab can find a restarted server on port +1..+5.
+
+    Never expose the Discord session, CSRF token, pinned guilds or user data
+    cross-origin. A public web site receives no CORS permission.
+    """
+    response = web.json_response({"discord_pilot": True, "version": read_version(BASE)},
+                                 headers={"Cache-Control": "no-store"})
+    origin = request.headers.get("Origin", "")
+    match = re.fullmatch(r"http://(?:127\.0\.0\.1|localhost):([0-9]{1,5})", origin)
+    if match and 1 <= int(match.group(1)) <= 65535:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return response
 
 
 def guild_summary(guild: discord.Guild):
@@ -413,7 +429,7 @@ async def api_update_apply(request):
                              f"{type(exc).__name__}. Le programme reste ouvert.") from exc
     EXIT_FOR_UPDATE = True
     asyncio.get_running_loop().call_later(1.25, STOP_EVENT.set)
-    return web.json_response({"ok": True, "restarting": True})
+    return web.json_response({"ok": True, "restarting": True, "target_version": pending["version"]})
 
 
 async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
@@ -539,6 +555,7 @@ def build_app():
     app.router.add_get("/", home)
     app.router.add_get("/assets/{name}", asset)
     app.router.add_get("/api/bootstrap", api_bootstrap)
+    app.router.add_get("/api/health", api_health)
     app.router.add_post("/api/connect", api_connect)
     app.router.add_post("/api/disconnect", api_disconnect)
     app.router.add_get("/api/invite", api_invite)
@@ -562,6 +579,18 @@ def build_app():
 
 async def start_local_site(runner: web.AppRunner, preferred_port: int) -> tuple[web.TCPSite, int]:
     """Bind localhost, trying nearby ports if an older instance owns the default."""
+    if os.getenv("DISCORD_PILOT_RESTART_PROBE") == "1":
+        # Give the previous instance a moment to release the exact URL used by
+        # the open browser tab before trying another port.
+        for _ in range(20):
+            site = web.TCPSite(runner, host="127.0.0.1", port=preferred_port)
+            try:
+                await site.start()
+                return site, runner.addresses[-1][1]
+            except OSError as exc:
+                if exc.errno not in {errno.EADDRINUSE, 10048} and getattr(exc, "winerror", None) != 10048:
+                    raise
+                await asyncio.sleep(0.25)
     candidates = [preferred_port]
     candidates.extend(range(preferred_port + 1, min(preferred_port + 5, 65535) + 1))
     candidates.append(0)  # Last resort: ask Windows to select a free local port.

@@ -36,18 +36,26 @@ function Get-ExecutableHash([string]$FilePath) {
 function Get-RunningServerVersion {
     # Avoid Invoke-RestMethod: its Windows PowerShell module can be unavailable
     # when the EXE inherits a PowerShell 7 PSModulePath from another launcher.
-    $request = [System.Net.WebRequest]::Create("http://127.0.0.1:$Port/api/bootstrap")
-    $request.Timeout = 1800
-    $request.Proxy = $null
-    $response = $request.GetResponse()
-    try {
-        $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
-        try { $body = $reader.ReadToEnd() }
-        finally { $reader.Dispose() }
-        if ($body -match '"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {
-            return $Matches[1]
+    foreach ($probePort in @($Port, ($Port + 1), ($Port + 2), ($Port + 3), ($Port + 4), ($Port + 5))) {
+        if ($probePort -gt 65535) { continue }
+        try {
+            $request = [System.Net.WebRequest]::Create("http://127.0.0.1:$probePort/api/bootstrap")
+            $request.Timeout = 1100
+            $request.Proxy = $null
+            $response = $request.GetResponse()
+            try {
+                $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
+                try { $body = $reader.ReadToEnd() }
+                finally { $reader.Dispose() }
+                if ($body -match '"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {
+                    if ($Matches[1] -eq $TargetVersion) {
+                        return @{ Version = $Matches[1]; Port = $probePort }
+                    }
+                }
+            } finally { $response.Dispose() }
+        } catch { # Wait for the new process to finish binding its local socket.
         }
-    } finally { $response.Dispose() }
+    }
     return $null
 }
 
@@ -109,10 +117,16 @@ try {
     $ready = $false
     for ($attempt = 1; $attempt -le 120; $attempt++) {
         try {
-            $runningVersion = Get-RunningServerVersion
-            if ($runningVersion -eq $TargetVersion) { $ready = $true; break }
+            $runningServer = Get-RunningServerVersion
+            if ($runningServer -and $runningServer.Version -eq $TargetVersion) {
+                if ($runningServer.Port -ne $Port) {
+                    Write-UpdateLog "Port $Port occupe; nouveau serveur disponible sur $($runningServer.Port)"
+                }
+                $ready = $true
+                break
+            }
             if ($attempt -eq 1 -or $attempt % 20 -eq 0) {
-                Write-UpdateLog "Sonde HTTP : tentative $attempt, version=$runningVersion"
+                Write-UpdateLog "Sonde HTTP : tentative $attempt, attente du serveur v$TargetVersion"
             }
         } catch {
             if ($attempt -eq 1 -or $attempt % 20 -eq 0) {

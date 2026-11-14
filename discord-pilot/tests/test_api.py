@@ -35,7 +35,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_and_csrf(self):
         home = await self.client.get("/")
         self.assertEqual(home.status, 200)
+        self.assertEqual(home.headers.get("Cache-Control"), "no-store")
         self.assertIn("Discord Pilot", await home.text())
+        js = await self.client.get("/assets/app.js")
+        self.assertEqual(js.status, 200)
+        self.assertEqual(js.headers.get("Cache-Control"), "no-store")
         boot = await self.client.get("/api/bootstrap")
         data = await boot.json()
         self.assertFalse(data["online"])
@@ -99,6 +103,21 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                                       headers={"X-Pilot-CSRF": csrf, "Origin": "https://example.org"})
         self.assertEqual(resp.status, 403)
 
+    async def test_loopback_recovery_probe_has_no_session_data_or_external_cors(self):
+        origin = "http://127.0.0.1:8765"
+        response = await self.client.get("/api/health", headers={"Origin": origin})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+        data = await response.json()
+        self.assertEqual(data, {"discord_pilot": True, "version": "0.4.6"})
+        refused = await self.client.get("/api/health", headers={"Origin": "https://malicious.example"})
+        self.assertEqual(refused.status, 200)
+        self.assertNotIn("Access-Control-Allow-Origin", refused.headers)
+        self.assertNotIn("csrf", await refused.json())
+        sensitive = await self.client.get("/api/bootstrap", headers={"Origin": "http://localhost:8765"})
+        self.assertNotIn("Access-Control-Allow-Origin", sensitive.headers)
+
     async def test_busy_port_uses_another_port_without_disabling_security(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
             occupied.bind(("127.0.0.1", 0))
@@ -115,7 +134,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap") as response:
                         self.assertEqual(response.status, 200)
                         data = await response.json()
-                        self.assertEqual(data["version"], "0.4.5")
+                        self.assertEqual(data["version"], "0.4.6")
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap",
                                           headers={"Host": "example.com"}) as response:
                         self.assertEqual(response.status, 403)
@@ -129,12 +148,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post("/api/update/source", json={"url": "http://127.0.0.1/admin"}, headers=header)
         self.assertEqual(invalid.status, 400)
         status = await self.client.get("/api/update/status")
-        self.assertEqual((await status.json())["version"], "0.4.5")
+        self.assertEqual((await status.json())["version"], "0.4.6")
         form = FormData()
-        form.add_field("file", make_archive("0.4.6"), filename="discord-pilot-update.zip", content_type="application/zip")
+        form.add_field("file", make_archive("0.4.7"), filename="discord-pilot-update.zip", content_type="application/zip")
         import_response = await self.client.post("/api/update/import", data=form, headers=header)
         self.assertEqual(import_response.status, 200)
-        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.6")
+        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.7")
         previous_stop, previous_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
         old_launcher = os.environ.get("DISCORD_PILOT_LAUNCHER")
         try:
@@ -155,7 +174,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         updates = app.STATE.root / "updates"
         updates.mkdir(parents=True, exist_ok=True)
         (updates / "pending.json").write_text(json.dumps({
-            "version": "0.4.6", "sha256": "a" * 64, "format": "exe",
+            "version": "0.4.7", "sha256": "a" * 64, "format": "exe",
         }), encoding="utf-8")
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
         old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
@@ -178,7 +197,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         updates = app.STATE.root / "updates"
         updates.mkdir(parents=True, exist_ok=True)
         (updates / "pending.json").write_text(json.dumps({
-            "version": "0.4.6", "sha256": "a" * 64, "format": "exe",
+            "version": "0.4.7", "sha256": "a" * 64, "format": "exe",
         }), encoding="utf-8")
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
         old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
