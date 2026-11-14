@@ -436,7 +436,7 @@ function renderModules() {
   const enabled = Object.values(data.settings).filter(row => row.enabled).length;
   const unavailable = [];
   if (!data.members_intent) unavailable.push("Server Members Intent (rôle automatique, accueil/invitations)");
-  if (!data.content_intent) unavailable.push("Message Content Intent (anti-liens, mots filtrés)");
+  if (!data.content_intent) unavailable.push("Message Content Intent (anti-liens, mots filtrés, Modmail)");
   $("moduleStatus").textContent = `${enabled} module(s) configuré(s) sur ce serveur. ${data.online ? "Bot connecté." : "Bot déconnecté : configuration impossible pour l'instant."} ${unavailable.length ? "Intents non disponibles : " + unavailable.join(" ; ") + ". Active-les dans Discord Developer Portal > Bot si besoin." : "Les intents requis sont connectés."} Les permissions Discord sont vérifiées lors des événements réels.`;
   replace(grid, data.modules.map(spec => {
     const current = data.settings[spec.id] || {};
@@ -449,7 +449,7 @@ function renderModules() {
     for (const [name, kind, labelText] of spec.fields) {
       const label = dom("label", "module-label", labelText);
       let input;
-      if (["role", "optional_role", "text", "optional_text", "voice", "category"].includes(kind)) {
+      if (["role", "optional_role", "text", "private_text", "optional_text", "voice", "category"].includes(kind)) {
         input = dom("select", "module-input");
         const empty = dom("option", "", kind.startsWith("optional") ? "Aucun (facultatif)" : "Choisir…"); empty.value = "";
         input.append(empty);
@@ -488,6 +488,12 @@ function renderModules() {
       panel.onclick = publishTicketPanel;
       article.append(panel);
     }
+    if (spec.id === "applications") {
+      const panel = dom("button", "outline-button", "📝 Publier le formulaire de candidature");
+      panel.disabled = !data.online || !current.enabled;
+      panel.onclick = publishApplicationPanel;
+      article.append(panel);
+    }
     return article;
   }));
   const ranking = data.leaderboard || [];
@@ -510,7 +516,7 @@ async function loadInteractive() {
 
 function renderInteractive() {
   const channels = (app.details?.channels || []).filter(c => c.type === "text");
-  ["pollChannel", "giveawayChannel"].forEach(id => {
+  ["pollChannel", "giveawayChannel", "quizChannel"].forEach(id => {
     const node = $(id), current = node.value;
     const empty = dom("option", "", "Choisir un salon"); empty.value = "";
     replace(node, [empty, ...channels.map(channel => {
@@ -518,7 +524,7 @@ function renderInteractive() {
     })]);
     node.value = current && channels.some(c => c.id === current) ? current : "";
   });
-  for (const id of ["pollForm", "giveawayForm"]) {
+  for (const id of ["pollForm", "giveawayForm", "quizForm"]) {
     $(id).querySelector("button[type=submit]").disabled = !app.bootstrap?.online || !channels.length;
   }
   const data = app.interactiveData;
@@ -526,15 +532,17 @@ function renderInteractive() {
   const events = [...data.events].reverse();
   const nodes = events.map(e => {
     const row = dom("div", "module-rank");
-    const subject = e.type === "poll" ? e.question : e.prize;
+    const subject = e.type === "poll" || e.type === "quiz" ? e.question : e.prize;
     const state = e.status === "closed" ? "Terminé" : "En cours";
-    row.append(dom("strong", "", `${e.type === "poll" ? "📊" : "🎁"} ${subject}`),
+    row.append(dom("strong", "", `${e.type === "poll" ? "📊" : e.type === "quiz" ? "🧠" : "🎁"} ${subject}`),
                dom("span", "", `${state} · ${new Date(e.ends_at * 1000).toLocaleString("fr-FR")}`));
-    if (e.result) row.append(dom("small", "", e.type === "poll" ? `Votes : ${e.result.votes.join(" / ")}` : `Participants : ${e.result.participants} · Gagnant : ${e.result.winner_id || "aucun"}`));
+    if (e.result) row.append(dom("small", "", e.type === "poll" ? `Votes : ${e.result.votes.join(" / ")}` : e.type === "quiz" ? `Bonnes réponses : ${e.result.correct} / ${e.result.participants}` : `Participants : ${e.result.participants} · Gagnant : ${e.result.winner_id || "aucun"}`));
     return row;
   });
   const tickets = data.tickets || [];
   if (tickets.length) nodes.unshift(dom("p", "module-description", `🎟️ ${tickets.filter(t => t.status === "open").length} ticket(s) ouvert(s) / ${tickets.length} au total.`));
+  const applications = data.applications || [];
+  if (applications.length) nodes.unshift(dom("p", "module-description", `📝 ${applications.filter(a => a.status === "pending").length} candidature(s) en attente sur ${applications.length}.`));
   replace($("interactiveHistory"), nodes.length ? nodes : [dom("p", "empty", "Pas encore de sondage ni de giveaway sur ce serveur.")]);
 }
 
@@ -547,21 +555,37 @@ function publishTicketPanel() {
     }});
 }
 
+function publishApplicationPanel() {
+  if (!app.selected) return;
+  modal({title: "Publier le formulaire de candidature", description: "Un bouton ouvre un formulaire Discord. Les réponses sont envoyées uniquement dans le salon privé de candidature configuré.",
+    confirmText: "Publier", onConfirm: async () => {
+      await request(`/api/interactive/${app.selected}/applications/panel`, {data: {}});
+      toast("Formulaire de candidature publié sur Discord."); await loadInteractive();
+    }});
+}
+
 function createInteractive(kind) {
   if (!app.selected) return toast("Sélectionne un serveur.", true);
-  const data = kind === "poll" ? {
+  const data = kind === "poll" || kind === "quiz" ? {
     channel_id: $("pollChannel").value, question: $("pollQuestion").value.trim(),
     options: $("pollOptions").value.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
     minutes: Number($("pollMinutes").value),
   } : {channel_id: $("giveawayChannel").value,
        prize: $("giveawayPrize").value.trim(), minutes: Number($("giveawayMinutes").value)};
+  if (kind === "quiz") {
+    data.channel_id = $("quizChannel").value;
+    data.question = $("quizQuestion").value.trim();
+    data.options = $("quizOptions").value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    data.minutes = Number($("quizMinutes").value);
+    data.correct_index = Number($("quizCorrect").value) - 1;
+  }
   const channel = (app.details?.channels || []).find(c => c.id === data.channel_id);
   if (!channel) return toast("Choisis un salon textuel disponible.", true);
-  modal({title: kind === "poll" ? "Publier le sondage ?" : "Lancer le giveaway ?",
+  modal({title: kind === "poll" ? "Publier le sondage ?" : kind === "quiz" ? "Lancer le quiz ?" : "Lancer le giveaway ?",
     description: `Publication réelle dans #${channel.name} sur ${currentGuild()?.name || "ce serveur"}. Les réactions seront ouvertes pendant ${data.minutes} minute(s).`,
     confirmText: "Publier maintenant", onConfirm: async () => {
       await request(`/api/interactive/${app.selected}/${kind}`, {data});
-      toast(kind === "poll" ? "Sondage publié sur Discord." : "Giveaway lancé sur Discord.");
+      toast(kind === "poll" ? "Sondage publié sur Discord." : kind === "quiz" ? "Quiz publié sur Discord." : "Giveaway lancé sur Discord.");
       await loadInteractive();
     }});
 }
@@ -914,6 +938,7 @@ async function init() {
   $("refreshModules").onclick = async () => { await loadDetails(); await Promise.all([loadModules(), loadInteractive()]); };
   $("pollForm").onsubmit = e => { e.preventDefault(); createInteractive("poll"); };
   $("giveawayForm").onsubmit = e => { e.preventDefault(); createInteractive("giveaway"); };
+  $("quizForm").onsubmit = e => { e.preventDefault(); createInteractive("quiz"); };
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => switchTab(t.dataset.tab));
   document.querySelectorAll("[data-example]").forEach(t => t.onclick = () => { $("requestText").value = t.dataset.example; switchTab("studio"); $("requestText").focus(); });
   await bootstrap(); renderPresets(); await loadCatalog(); await models();
