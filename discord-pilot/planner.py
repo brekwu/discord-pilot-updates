@@ -69,6 +69,14 @@ MODEL_ACTION_ALIASES = {
     "post_message": "send_message", "send_channel_message": "send_message",
     "private_channel": "make_private", "set_channel_private": "make_private",
     "remove_channel": "delete_channel", "remove_role": "delete_role",
+    "creer_salon": "create_text_channel", "creer_un_salon": "create_text_channel",
+    "creer_salon_textuel": "create_text_channel", "ajouter_salon": "create_text_channel",
+    "creer_salon_vocal": "create_voice_channel", "ajouter_vocal": "create_voice_channel",
+    "creer_categorie": "create_category", "ajouter_categorie": "create_category",
+    "creer_role": "create_role", "ajouter_role": "create_role",
+    "envoyer_message": "send_message", "publier_message": "send_message",
+    "renommer_salon": "rename_channel", "renommer_role": "rename_role",
+    "supprimer_salon": "delete_channel", "supprimer_role": "delete_role",
 }
 
 MODEL_FIELD_ALIASES = {
@@ -97,6 +105,12 @@ def split_names(raw: str) -> list[str]:
     raw = re.sub(r"\s+(?:et|ainsi que)\s+", ",", raw, flags=re.I)
     raw = raw.replace(" / ", ",")
     return [name for piece in raw.split(",") if (name := clean_name(piece))]
+
+
+def requested_count(text: str) -> int | None:
+    """Honor a precise small quantity without quietly omitting requested rooms."""
+    match = re.search(r"\b(deux|trois|quatre|[234])\s+(?:salons?|channels?|canaux|chan|vocaux?|vocals?)\b", norm(text))
+    return {"deux": 2, "trois": 3, "quatre": 4, "2": 2, "3": 3, "4": 4}.get(match.group(1)) if match else None
 
 
 def action(action_type: str, **kwargs: str) -> dict[str, str]:
@@ -205,12 +219,15 @@ def parse_ollama_response(text: str) -> list[dict[str, str]]:
 def parse_ollama_decision(text: str) -> tuple[list[dict[str, str]], str | None]:
     """Allow a local model to request missing information without guessing it."""
     text = text.strip()
+    text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text, flags=re.I)
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     result = json.loads(text)
     if isinstance(result, dict):
         question = result.get("question")
-        actions = result.get("actions", [])
+        actions = result.get("actions", result.get("operations", result.get("steps", [])))
+        if not actions and ("type" in result or "action" in result):
+            actions = [result]
         if actions:
             return normalize_model_actions(actions), None
         if isinstance(question, str) and 5 <= len(question.strip()) <= 300:
@@ -249,7 +266,7 @@ Ne propose aucune action implicite en dehors de la demande. Évite les doublons.
 def missing_information(prompt: str) -> str | None:
     """Ask a useful follow-up instead of returning a generic invalid request."""
     normalized = norm(prompt).strip(" .!?")
-    if re.search(r"\b(?:ajout(?:e|er)?|rajout(?:e|er)?|cre(?:e|er)|fais|mettre|mets)\b", normalized):
+    if re.search(r"\b(?:ajout(?:e|er)?|rajout(?:e|er)?|cre(?:e|er)|fais|mettre|mets|veux|voudrais|souhaiterais)\b", normalized):
         if re.search(r"\b(?:channels?|chan|canal|canaux|salons?)\b(?:\s+(?:texte|textuel|vocal))?(?:\s+dans\s+(?:la\s+)?categorie\s+\S+)?$", normalized):
             return "Quel nom veux-tu donner au salon ? (Exemple : annonces)"
         if re.search(r"\brole\b$", normalized):
@@ -290,10 +307,14 @@ def default_creation_plan(prompt: str) -> list[dict[str, str]]:
     normalized = norm(prompt).strip(" .!?")
     if re.search(r"\b(?:channels?|chan|canal|canaux|salons?)\b", normalized):
         category = re.search(r"\bdans\s+(?:la\s+)?cat[eé]gorie\s+(.+)$", prompt, re.I)
-        payload = {"name": "nouveau-salon"}
-        if category:
-            payload["category"] = clean_name(category.group(1))
-        return validate_actions([action("create_text_channel", **payload)])
+        count = requested_count(prompt) or 1
+        actions = []
+        for index in range(count):
+            payload = {"name": "nouveau-salon" if count == 1 else f"nouveau-salon-{index + 1}"}
+            if category:
+                payload["category"] = clean_name(category.group(1))
+            actions.append(action("create_text_channel", **payload))
+        return validate_actions(actions)
     if re.search(r"\broles?\b", normalized):
         return validate_actions([action("create_role", name="Nouveau rôle")])
     if re.search(r"\bcategorie\b", normalized):
@@ -372,17 +393,32 @@ PRESETS = {
 def local_parse(prompt: str) -> list[dict[str, str]]:
     """Deterministic, intentionally narrow offline parser. No guessing."""
     results: list[dict[str, str]] = []
+    stated_want = bool(re.match(r"(?i)^\s*(?:bonjour[,.!]?\s+|salut[,.!]?\s+|alors\s+|du coup\s+|bon\s+|ok\s+)*(?:je veux|je voudrais|j['’]aimerais|je souhaiterais|tu peux|peux.tu|est.ce que tu peux|pourrais.tu|il faut|il faudrait)\b", prompt))
+    # Speech input is conversational: the actual command often follows
+    # "je veux", "tu peux me" or "j'aimerais que tu". Strip only these
+    # harmless wrappers, never the operation or its target.
+    prompt = re.sub(
+        r"(?i)^\s*(?:(?:bonjour|salut|alors|du coup|ok|bon)[,.!]?\s+)*"
+        r"(?:est.ce que tu peux|tu peux|peux.tu|pourrais.tu|je veux|"
+        r"je voudrais|j['’]aimerais|je souhaiterais|il faut|il faudrait)\s+"
+        r"(?:(?:que tu|me|m'|nous)\s*)*",
+        "", prompt.strip())
+    prompt = re.sub(r"(?i)^\s*(?:que tu|me|m')\s+", "", prompt)
     # Semicolons/newlines are unambiguous, unlike commas in role or channel lists.
     prompt = re.sub(r"\s+et\s+(?=(?:cr[eé]e|ajoute|renomme|supprime|rends?|publie|envoie)\b)", "; ", prompt, flags=re.I)
     prompt = re.sub(r"\s+et\s+(?=(?:un|une|des|les)\s+(?:r[oô]les?|salons?|cat[eé]gorie)\b)", "; crée ", prompt, flags=re.I)
-    clauses = [c.strip() for c in re.split(r"[;\n]+|\s+\bpuis\b\s+", prompt, flags=re.I) if c.strip()]
+    clauses = [c.strip() for c in re.split(r"[;\n]+|\s+\b(?:puis|ensuite|apr[eè]s)\b\s+", prompt, flags=re.I) if c.strip()]
     for clause in clauses:
         clause = clause.strip().strip(".!")
+        clause = re.sub(r"(?i)^\s*(?:et\s+)?(?:je veux|je voudrais|j['’]aimerais|tu peux me)\s+", "", clause)
+        clause = re.sub(r"(?i)^\s*(?:un autre|une autre)\s+(?=(?:salon|channel|canal|r[oô]le)\b)", "crée un ", clause)
+        if (stated_want or results) and re.match(r"(?i)^(?:un|une|des|deux|trois|2|3)\s+(?:salons?|channels?|canal|canaux|chan|vocaux?|vocal|r[oô]le|cat[eé]gorie)\b", clause):
+            clause = "crée " + clause
         # These imply additional behavior that the offline interpreter cannot guarantee.
         if re.search(r"\bet\s+(?:lance|programme|active|configure|automatis|connecte|installe|param[eè]tre)\b", clause, re.I):
             return []
-        prefix = r"(?:cr[eé]e|cr[eé]er|ajoute|ajouter|rajoute|rajouter|fais|faire|mets|mettre|je veux|il me faut|installe|installer)(?:-moi)?"
-        salon_word = r"(?:salons?|channels?|canal|canaux|chan)"
+        prefix = r"(?:cr[eé]e(?:s|r)?|ajoute|ajouter|rajoute|rajouter|fais|faire|mets|mettre|je veux|il me faut|installe|installer)(?:-moi)?"
+        salon_word = r"(?:salons?|channels?|canal|canaux|chan|vocaux?|vocal)"
         # Editing commands must precede the generic "salon" extractor.
         m = re.search(rf"\b(?:renomme|renommer)\s+(?:le\s+)?{salon_word}\s+(.+?)\s+(?:en|par)\s+(.+)$", clause, re.I)
         if m:
@@ -424,11 +460,16 @@ def local_parse(prompt: str) -> list[dict[str, str]]:
             names = split_names(m.group(1))
             results.extend(action("create_role", name=n) for n in names)
             continue
-        m = re.match(rf"^(?:{prefix}\s+)(?:(?:un|une|des|les?|la)\s+)?{salon_word}\s+(?:(vocaux?|vocal|textuels?|textes?)\s+)?(?:(?:nomm[eé]|appel[eé]|qui s'appelle)\s+)?(.+?)(?:\s+dans\s+(?:la\s+)?cat[eé]gorie\s+(.+))?$", clause, re.I)
+        m = re.match(rf"^(?:{prefix}\s+)(?:(?:un|une|des|les?|la|deux|trois|quatre|2|3|4)\s+)?({salon_word})\s+(?:(vocaux?|vocal|textuels?|textes?)\s+)?(?:(?:nomm[eé]s?|appel[eé]s?|qui s'appelle)\s+)?(.+?)(?:\s+dans\s+(?:la\s+)?cat[eé]gorie\s+(.+))?$", clause, re.I)
         if m:
-            kind = "create_voice_channel" if m.group(1) and norm(m.group(1)).startswith("voc") else "create_text_channel"
-            names = split_names(m.group(2))
-            category = clean_name(m.group(3)) if m.group(3) else None
+            kind = "create_voice_channel" if norm(m.group(1)).startswith("voc") or (m.group(2) and norm(m.group(2)).startswith("voc")) else "create_text_channel"
+            names = split_names(re.sub(r"(?i)^(?:(?:de|pour)\s+(?:les?|des|la|l')?\s*)", "", m.group(3)).strip())
+            count = requested_count(clause)
+            if count and len(names) > count:
+                return []
+            if count and len(names) < count:
+                names.extend(f"nouveau-salon-{n}" for n in range(len(names) + 1, count + 1))
+            category = clean_name(m.group(4)) if m.group(4) else None
             for name in names:
                 payload = {"name": name}
                 if category:
