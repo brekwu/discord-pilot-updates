@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import socket
-import sys
 import tempfile
 import unittest
 import wave
@@ -55,7 +54,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_microphone_transcription_endpoint_and_security(self):
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
-        samples = b"\0\0" * 16000
+        samples = b"\x00\x10" * 16000
         stream = BytesIO()
         with wave.open(stream, "wb") as audio:
             audio.setnchannels(1)
@@ -75,26 +74,23 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         invalid_type = await self.client.post("/api/transcribe", data=payload,
                                               headers={"X-Pilot-CSRF": csrf, "Content-Type": "application/octet-stream"})
         self.assertEqual(invalid_type.status, 400)
-        with patch.object(app, "ensure_voice_model") as download:
+        with patch.object(app, "load_voice_model") as download:
             with self.assertRaisesRegex(ValueError, "Enregistrement audio illisible"):
                 app.transcribe_french_wav(b"not-a-wav", app.STATE.root)
             download.assert_not_called()
-        class StubRecognizer:
-            def __init__(self, model, sample_rate):
-                self.sample_rate = sample_rate
+        class StubWhisper:
+            def transcribe(self, wave_samples, **kwargs):
+                self.sample_rate = len(wave_samples)
+                self.options = kwargs
+                return [SimpleNamespace(text=" crée un salon vocal général ")], None
 
-            def AcceptWaveform(self, frames):
-                return False
-
-            def FinalResult(self):
-                return json.dumps({"text": "crée un salon vocal général"})
-
-        fake_vosk = SimpleNamespace(KaldiRecognizer=StubRecognizer)
-        with patch.object(app, "ensure_voice_model", return_value=Path("modele-local")), \
-             patch.object(app, "load_voice_model", return_value=object()), \
-             patch.dict(sys.modules, {"vosk": fake_vosk}):
+        stub_model = StubWhisper()
+        with patch.object(app, "load_voice_model", return_value=stub_model) as loading:
             self.assertEqual(app.transcribe_french_wav(payload, app.STATE.root),
                              "crée un salon vocal général")
+            loading.assert_called_once_with(str(app.STATE.root))
+            self.assertEqual(stub_model.sample_rate, 16000)
+            self.assertEqual(stub_model.options["language"], "fr")
 
     async def test_discord_login_failure_is_reported_without_exposing_token(self):
         manager = app.BotManager()
@@ -157,7 +153,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
         self.assertEqual(response.headers.get("Cache-Control"), "no-store")
         data = await response.json()
-        self.assertEqual(data, {"discord_pilot": True, "version": "0.4.8"})
+        self.assertEqual(data, {"discord_pilot": True, "version": "0.4.9"})
         refused = await self.client.get("/api/health", headers={"Origin": "https://malicious.example"})
         self.assertEqual(refused.status, 200)
         self.assertNotIn("Access-Control-Allow-Origin", refused.headers)
@@ -181,7 +177,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap") as response:
                         self.assertEqual(response.status, 200)
                         data = await response.json()
-                        self.assertEqual(data["version"], "0.4.8")
+                        self.assertEqual(data["version"], "0.4.9")
                     async with client.get(f"http://127.0.0.1:{selected}/api/bootstrap",
                                           headers={"Host": "example.com"}) as response:
                         self.assertEqual(response.status, 403)
@@ -195,12 +191,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post("/api/update/source", json={"url": "http://127.0.0.1/admin"}, headers=header)
         self.assertEqual(invalid.status, 400)
         status = await self.client.get("/api/update/status")
-        self.assertEqual((await status.json())["version"], "0.4.8")
+        self.assertEqual((await status.json())["version"], "0.4.9")
         form = FormData()
-        form.add_field("file", make_archive("0.4.9"), filename="discord-pilot-update.zip", content_type="application/zip")
+        form.add_field("file", make_archive("0.4.10"), filename="discord-pilot-update.zip", content_type="application/zip")
         import_response = await self.client.post("/api/update/import", data=form, headers=header)
         self.assertEqual(import_response.status, 200)
-        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.9")
+        self.assertEqual((await import_response.json())["pending"]["version"], "0.4.10")
         previous_stop, previous_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE
         old_launcher = os.environ.get("DISCORD_PILOT_LAUNCHER")
         try:
@@ -244,7 +240,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         updates = app.STATE.root / "updates"
         updates.mkdir(parents=True, exist_ok=True)
         (updates / "pending.json").write_text(json.dumps({
-            "version": "0.4.8", "sha256": "a" * 64, "format": "exe",
+            "version": "0.4.10", "sha256": "a" * 64, "format": "exe",
         }), encoding="utf-8")
         csrf = (await (await self.client.get("/api/bootstrap")).json())["csrf"]
         old_stop, old_exit = app.STOP_EVENT, app.EXIT_FOR_UPDATE

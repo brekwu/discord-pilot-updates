@@ -9,19 +9,15 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
-from pathlib import PurePosixPath
 import re
 import secrets
 import shutil
-import stat
 import subprocess
 import sys
 import urllib.error
-import urllib.parse
-import urllib.request
 import webbrowser
 import wave
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile
 
 import aiohttp
 from aiohttp import web
@@ -44,8 +40,7 @@ STATE = State()
 CSRF = secrets.token_urlsafe(32)
 ID_RE = re.compile(r"^\d{17,20}$")
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/brekwu/discord-pilot-updates/main/update.json"
-VOICE_MODEL_NAME = "vosk-model-small-fr-0.22"
-VOICE_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOICE_MODEL_NAME}.zip"
+VOICE_MODEL_NAME = "base"
 MAX_VOICE_BYTES = 8 * 1024 * 1024  # 16 kHz mono WAV: about two minutes.
 
 
@@ -188,57 +183,20 @@ async def asset(request):
     return web.FileResponse(BASE / "web" / name, headers={"Cache-Control": "no-store"})
 
 
-def ensure_voice_model(data_root: Path) -> Path:
-    """One-time automatic French model setup; never erase user settings."""
-    target = data_root / "speech" / VOICE_MODEL_NAME
-    if (target / "am" / "final.mdl").is_file():
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(VOICE_MODEL_URL, headers={"User-Agent": "DiscordPilot-Voice/1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            origin = urllib.parse.urlsplit(response.geturl())
-            if origin.scheme != "https" or origin.hostname not in {"alphacephei.com", "www.alphacephei.com"}:
-                raise ValueError("La source du modèle vocal a changé de domaine.")
-            raw = response.read(90 * 1024 * 1024 + 1)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ValueError("Téléchargement automatique du modèle vocal français impossible. Réessaie avec Internet actif.") from exc
-    if len(raw) > 90 * 1024 * 1024:
-        raise ValueError("Le modèle vocal téléchargé dépasse la limite de sécurité.")
-    try:
-        with ZipFile(BytesIO(raw)) as archive:
-            members = archive.infolist()
-            if not members or sum(info.file_size for info in members) > 180 * 1024 * 1024:
-                raise ValueError("Archive du modèle vocal invalide ou trop volumineuse.")
-            for info in members:
-                parts = PurePosixPath(info.filename).parts
-                if not parts or parts[0] != VOICE_MODEL_NAME or ".." in parts or info.filename.startswith("/"):
-                    raise ValueError("Archive vocale contenant un chemin non autorisé.")
-                if stat.S_ISLNK(info.external_attr >> 16):
-                    raise ValueError("Archive vocale contenant un lien non autorisé.")
-            # Extract to an isolated temporary directory, then publish in one move.
-            import tempfile
-            with tempfile.TemporaryDirectory(dir=target.parent) as temp:
-                archive.extractall(temp)
-                extracted = Path(temp) / VOICE_MODEL_NAME
-                if not (extracted / "am" / "final.mdl").is_file():
-                    raise ValueError("Fichiers du modèle vocal incomplets.")
-                if target.exists():
-                    shutil.rmtree(target)
-                shutil.move(str(extracted), str(target))
-    except BadZipFile as exc:
-        raise ValueError("Archive du modèle vocal illisible.") from exc
-    return target
-
-
 @lru_cache(maxsize=1)
-def load_voice_model(path: str):
+def load_voice_model(data_root: str):
+    """Load multilingual Whisper on CPU; download model once into the app data."""
     try:
-        from vosk import Model, SetLogLevel
+        from faster_whisper import WhisperModel
     except ImportError as exc:
         raise ValueError("Moteur de transcription indisponible dans cette version de l'application.") from exc
-    SetLogLevel(-1)
-    return Model(path)
+    model_cache = Path(data_root) / "speech" / "whisper-models"
+    model_cache.mkdir(parents=True, exist_ok=True)
+    try:
+        return WhisperModel(VOICE_MODEL_NAME, device="cpu", compute_type="int8",
+                            download_root=str(model_cache), cpu_threads=min(6, os.cpu_count() or 4))
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Modèle vocal indisponible. Vérifie Internet lors du premier usage puis réessaie.") from exc
 
 
 def transcribe_french_wav(payload: bytes, data_root: Path) -> str:
@@ -250,15 +208,15 @@ def transcribe_french_wav(payload: bytes, data_root: Path) -> str:
                 raise ValueError("Audio non compatible : WAV mono, 16 kHz, 16 bits requis.")
             if wav.getnframes() < 8000 or wav.getnframes() > 16000 * 120:
                 raise ValueError("Dicte entre 0,5 et 120 secondes.")
-            model = load_voice_model(str(ensure_voice_model(data_root)))
-            from vosk import KaldiRecognizer
-            recognizer = KaldiRecognizer(model, 16000)
-            phrases = []
-            while frames := wav.readframes(4000):
-                if recognizer.AcceptWaveform(frames):
-                    phrases.append(json.loads(recognizer.Result()).get("text", ""))
-            phrases.append(json.loads(recognizer.FinalResult()).get("text", ""))
-            return " ".join(p for p in phrases if p).strip()
+            import numpy as np
+            frames = wav.readframes(wav.getnframes())
+            samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+            if np.max(np.abs(samples)) < 0.0008:
+                raise ValueError("Le microphone n'a presque capté aucun son. Vérifie l'entrée audio sélectionnée dans Opera et Windows.")
+            model = load_voice_model(str(data_root))
+            segments, _ = model.transcribe(samples, beam_size=5, language="fr",
+                                            vad_filter=False, condition_on_previous_text=False)
+            return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
     except (wave.Error, EOFError) as exc:
         raise ValueError("Enregistrement audio illisible.") from exc
 
