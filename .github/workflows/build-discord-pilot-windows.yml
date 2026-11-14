@@ -27,6 +27,14 @@ jobs:
           Expand-Archive -LiteralPath 'sources.zip' -DestinationPath 'buildsrc'
           if (-not (Test-Path 'buildsrc/discord-pilot/windows_entrypoint.py')) { throw 'Entrée Windows introuvable' }
 
+      - name: Appliquer les correctifs 0.4.2
+        shell: pwsh
+        run: |
+          Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
+          Copy-Item 'discord-pilot/web/app.js' 'buildsrc/discord-pilot/web/app.js' -Force
+          Copy-Item 'discord-pilot/tests/test_api.py' 'buildsrc/discord-pilot/tests/test_api.py' -Force
+          Copy-Item 'discord-pilot/version.json' 'buildsrc/discord-pilot/version.json' -Force
+
       - name: Installer les dépendances et exécuter les tests
         working-directory: buildsrc/discord-pilot
         run: |
@@ -53,7 +61,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.1' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.2' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -84,7 +92,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.1' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.2' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -97,6 +105,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.4.1
+          name: DiscordPilot_EXE_Windows_v0.4.2
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
