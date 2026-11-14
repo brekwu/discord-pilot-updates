@@ -25,6 +25,7 @@ from aiohttp import web
 import discord
 
 from discord_ops import execute_action
+from community_interactions import OPTION_EMOJIS, poll_summary, utc_timestamp, validate_event
 from community_modules import (MODULES, SpamTracker, normalize_module,
                                paris_slot, public_modules, should_filter)
 from integration_catalog import PROVIDERS, catalog, recommended_providers
@@ -107,6 +108,8 @@ class PilotBot(discord.Client):
         self.invite_locks: dict[int, asyncio.Lock] = {}
         self.spam_tracker = SpamTracker()
         self.daily_task: asyncio.Task | None = None
+        self.ticket_locks: dict[int, asyncio.Lock] = {}
+        self.event_locks: dict[str, asyncio.Lock] = {}
 
     async def on_ready(self):
         self.manager.error = None
@@ -163,7 +166,156 @@ class PilotBot(discord.Client):
                     STATE.save()
             except (discord.Forbidden, discord.HTTPException, ValueError, KeyError) as exc:
                 self.manager.automation_warning = f"Annonce quotidienne non envoyée : {type(exc).__name__}."
+            await self.process_due_events()
             await asyncio.sleep(30)
+
+    async def process_due_events(self):
+        """Close scheduled polls/giveaways, including ones ending while offline.
+
+        Saving a final result before announcing allows a later run to retry a
+        failed announcement without drawing a different giveaway winner.
+        """
+        now = time.time()
+        for guild in self.guilds:
+            for record in list(STATE.state["interactive_events"].get(str(guild.id), {}).values()):
+                if float(record.get("ends_at", now + 1)) > now or record.get("announced"):
+                    continue
+                lock = self.event_locks.setdefault(record["id"], asyncio.Lock())
+                if lock.locked():
+                    continue
+                async with lock:
+                    try:
+                        await self.finish_event(guild, record)
+                    except (discord.HTTPException, discord.Forbidden, ValueError, KeyError) as exc:
+                        self.manager.automation_warning = f"Fin de l'événement {record['id'][:8]} en attente : {type(exc).__name__}."
+
+    async def finish_event(self, guild, record):
+        channel = guild.get_channel(int(record["channel_id"]))
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError("Salon de l'événement introuvable.")
+        if record["status"] == "open":
+            message = await channel.fetch_message(int(record["message_id"]))
+            if record["type"] == "poll":
+                counts = []
+                for emoji in OPTION_EMOJIS[:len(record["options"])]:
+                    reaction = next((r for r in message.reactions if str(r.emoji) == emoji), None)
+                    counts.append(max(0, reaction.count - (1 if reaction.me else 0)) if reaction else 0)
+                record["result"] = {"votes": counts}
+                record["announcement"] = poll_summary(record["question"], record["options"], counts)
+            else:
+                reaction = next((r for r in message.reactions if str(r.emoji) == "🎉"), None)
+                participants = [user.id async for user in reaction.users(limit=None) if not user.bot] if reaction else []
+                winner = secrets.choice(participants) if participants else None
+                record["result"] = {"participants": len(participants), "winner_id": str(winner) if winner else None}
+                record["announcement"] = (f"🎁 **Giveaway terminé : {record['prize']}**\n"
+                                          + (f"Bravo <@{winner}> ! ({len(participants)} participant(s))"
+                                             if winner else "Aucun participant éligible."))
+            record["status"] = "closed"
+            STATE.save()
+        sent = await channel.send(record["announcement"], allowed_mentions=discord.AllowedMentions(
+            everyone=False, roles=False, users=record["type"] == "giveaway"))
+        record["announced"] = True
+        record["result_message_id"] = str(sent.id)
+        STATE.save()
+
+    async def on_interaction(self, interaction):
+        """Handle self-owned Discord buttons even after restarting this bot."""
+        if interaction.type != discord.InteractionType.component or not interaction.guild:
+            return
+        data = interaction.data if isinstance(interaction.data, dict) else {}
+        custom = data.get("custom_id", "")
+        if not isinstance(custom, str) or not re.fullmatch(r"pilot:ticket:(?:open|close):\d{17,20}(?::\d{17,20})?", custom):
+            return
+        _, _, mode, guild_id, *args = custom.split(":")
+        if guild_id != str(interaction.guild.id):
+            return
+        if mode == "open" and not args:
+            await self.open_ticket(interaction)
+        elif mode == "close" and len(args) == 1 and args[0] == str(interaction.channel_id):
+            await self.close_ticket(interaction)
+
+    async def open_ticket(self, interaction):
+        guild = interaction.guild
+        gid = str(guild.id)
+        cfg = STATE.module(gid, "tickets")
+        if not cfg.get("enabled"):
+            await interaction.response.send_message("Les tickets sont désactivés sur ce serveur.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with self.ticket_locks.setdefault(guild.id, asyncio.Lock()):
+            tickets = STATE.state["tickets"].setdefault(gid, {})
+            existing = next((cid for cid, row in tickets.items()
+                             if row.get("owner_id") == str(interaction.user.id) and row.get("status") == "open"
+                             and guild.get_channel(int(cid)) is not None), None)
+            if existing:
+                await interaction.followup.send(f"Tu as déjà un ticket : <#{existing}>.", ephemeral=True)
+                return
+            category = guild.get_channel(int(cfg["category_id"]))
+            if not isinstance(category, discord.CategoryChannel):
+                await interaction.followup.send("La catégorie des tickets n'existe plus. Préviens le staff.", ephemeral=True)
+                return
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True,
+                                                               read_message_history=True),
+            }
+            if guild.me:
+                overwrites[guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
+                                                                    manage_channels=True, read_message_history=True)
+            if cfg.get("staff_role_id"):
+                role = guild.get_role(int(cfg["staff_role_id"]))
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
+                                                                    read_message_history=True)
+            try:
+                channel = await guild.create_text_channel(
+                    f"ticket-{str(interaction.user.id)[-6:]}", category=category,
+                    topic=f"Ticket créé par {interaction.user.id}", overwrites=overwrites,
+                    reason="Discord Pilot : ticket ouvert")
+                tickets[str(channel.id)] = {"owner_id": str(interaction.user.id),
+                                            "status": "open", "created_at": utc_timestamp()}
+                STATE.save()
+                view = discord.ui.View(timeout=None)
+                view.add_item(discord.ui.Button(label="Fermer et archiver ce ticket", style=discord.ButtonStyle.secondary,
+                                                custom_id=f"pilot:ticket:close:{gid}:{channel.id}", emoji="🔒"))
+                await channel.send(f"🎟️ Ticket ouvert par {interaction.user.mention}. Explique ta demande ici.",
+                                   view=view, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+                await interaction.followup.send(f"Ton ticket privé est prêt : {channel.mention}", ephemeral=True)
+            except (discord.Forbidden, discord.HTTPException):
+                await interaction.followup.send("Ouverture impossible : autorisations du bot insuffisantes.", ephemeral=True)
+
+    async def close_ticket(self, interaction):
+        guild = interaction.guild
+        tickets = STATE.state["tickets"].setdefault(str(guild.id), {})
+        ticket = tickets.get(str(interaction.channel_id))
+        if not ticket or ticket.get("status") != "open":
+            await interaction.response.send_message("Ce ticket est déjà fermé ou n'existe pas.", ephemeral=True)
+            return
+        cfg = STATE.module(str(guild.id), "tickets")
+        is_owner = ticket["owner_id"] == str(interaction.user.id)
+        staff = cfg.get("staff_role_id")
+        staff_member = bool(staff and any(str(role.id) == staff for role in getattr(interaction.user, "roles", [])))
+        can_manage = bool(interaction.user.guild_permissions.manage_channels)
+        if not (is_owner or staff_member or can_manage):
+            await interaction.response.send_message("Seul l'auteur ou le support peut fermer ce ticket.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            opener = guild.get_member(int(ticket["owner_id"])) or await guild.fetch_member(int(ticket["owner_id"]))
+        except discord.HTTPException:
+            opener = None
+        try:
+            if opener:
+                await interaction.channel.set_permissions(opener, view_channel=False,
+                                                          reason="Discord Pilot : ticket archivé")
+            await interaction.channel.edit(name=f"archive-{interaction.channel.name[:85]}",
+                                           reason="Discord Pilot : fermeture du ticket")
+            ticket["status"] = "closed"
+            ticket["closed_at"] = utc_timestamp()
+            STATE.save()
+            await interaction.followup.send("Ticket fermé et conservé dans les archives.", ephemeral=True)
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.followup.send("Fermeture impossible : vérifie les permissions du bot.", ephemeral=True)
 
     async def on_message(self, message):
         if message.guild is None or message.author.bot:
@@ -763,6 +915,69 @@ async def api_module_update(request):
                               "note": "Configuration enregistrée ; fonctionnement seulement lorsque le bot est connecté."})
 
 
+async def api_interactive(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    return web.json_response({
+        "guild_id": guild_id,
+        "events": list(STATE.state["interactive_events"].get(guild_id, {}).values())[-50:],
+        "tickets": list(STATE.state["tickets"].get(guild_id, {}).values()),
+        "ticket_panel": STATE.state["ticket_panels"].get(guild_id),
+    })
+
+
+async def api_ticket_panel(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if not guild:
+        raise ValueError("Connecte le bot au serveur pour publier des tickets.")
+    cfg = STATE.module(guild_id, "tickets")
+    if not cfg.get("enabled"):
+        raise ValueError("Active et configure le module Tickets privés avant de publier le panneau.")
+    channel = guild.get_channel(int(cfg["panel_channel_id"]))
+    if not isinstance(channel, discord.TextChannel):
+        raise ValueError("Le salon du panneau n'existe plus.")
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="Ouvrir un ticket", style=discord.ButtonStyle.primary,
+                                    custom_id=f"pilot:ticket:open:{guild_id}", emoji="🎟️"))
+    try:
+        panel = await channel.send("🎟️ **Besoin d'aide ?** Clique ci-dessous pour ouvrir un ticket privé.",
+                                   view=view, allowed_mentions=discord.AllowedMentions.none())
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise ValueError(f"Impossible de publier le panneau : {type(exc).__name__}.") from exc
+    STATE.state["ticket_panels"][guild_id] = {"channel_id": str(channel.id), "message_id": str(panel.id)}
+    STATE.save()
+    return web.json_response({"ok": True, "panel": STATE.state["ticket_panels"][guild_id]})
+
+
+async def api_interactive_create(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if not guild:
+        raise ValueError("Connecte le bot au serveur pour organiser un événement.")
+    data = await body_json(request)
+    kind = request.match_info["kind"]
+    valid = validate_event(kind, data, guild)
+    channel = guild.get_channel(int(valid["channel_id"]))
+    end_at = int(time.time() + valid["minutes"] * 60)
+    if kind == "poll":
+        lines = [f"{OPTION_EMOJIS[i]} {answer}" for i, answer in enumerate(valid["options"])]
+        msg = (f"📊 **{valid['question']}**\n" + "\n".join(lines)
+               + f"\nVote avec une réaction. Fin : <t:{end_at}:R>.")
+        reactions = OPTION_EMOJIS[:len(valid["options"])]
+    else:
+        msg = f"🎁 **Giveaway : {valid['prize']}**\nRéagis avec 🎉 pour participer. Fin : <t:{end_at}:R>."
+        reactions = ("🎉",)
+    try:
+        posted = await channel.send(msg, allowed_mentions=discord.AllowedMentions.none())
+        for emoji in reactions:
+            await posted.add_reaction(emoji)
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise ValueError(f"Publication ou ajout de réactions impossible : {type(exc).__name__}.") from exc
+    record = STATE.add_interactive_event(guild_id, {**valid, "message_id": str(posted.id),
+                                                     "ends_at": end_at, "created_at": utc_timestamp()})
+    return web.json_response({"ok": True, "event": record})
+
+
 async def api_export(request):
     guild_id = require_id(request.match_info["guild_id"])
     payload = json.dumps({"guild_id": guild_id, "plans": STATE.history(guild_id)},
@@ -1120,6 +1335,9 @@ def build_app():
     app.router.add_get("/api/history/{guild_id}", api_history)
     app.router.add_get("/api/modules/{guild_id}", api_modules)
     app.router.add_post("/api/modules/{guild_id}/{module}", api_module_update)
+    app.router.add_get("/api/interactive/{guild_id}", api_interactive)
+    app.router.add_post("/api/interactive/{guild_id}/tickets/panel", api_ticket_panel)
+    app.router.add_post("/api/interactive/{guild_id}/{kind}", api_interactive_create)
     app.router.add_get("/api/export/{guild_id}", api_export)
     app.router.add_get("/api/models", api_models)
     app.router.add_get("/api/catalog", api_catalog)
