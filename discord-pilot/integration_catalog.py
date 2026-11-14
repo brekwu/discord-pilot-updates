@@ -98,6 +98,8 @@ FEATURE_NATIVE = {
     30: "wordfilter", 35: "audit", 55: "giveaway",
     56: "quiz", 57: "poll", 83: "tickets",
     84: "modmail", 85: "applications",
+    15: "level_rewards", 17: "invite_rewards", 18: "invite_rewards",
+    32: "warnings", 69: "activity_stats",
 }
 
 

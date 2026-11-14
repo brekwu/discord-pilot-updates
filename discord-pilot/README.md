@@ -103,9 +103,9 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Modules natifs locaux (v0.5.8)
+### Modules natifs locaux (v0.5.9)
 
-L'onglet **Modules actifs** contient treize modules **réellement développés**,
+L'onglet **Modules actifs** contient dix-sept modules **réellement développés**,
 désactivés au départ et configurés séparément pour chaque serveur :
 
 1. Rôle attribué aux nouveaux membres.
@@ -121,6 +121,12 @@ désactivés au départ et configurés séparément pour chaque serveur :
 11. Tickets privés : panneau à bouton, un ticket ouvert par membre, salon réservé au demandeur et au rôle support sélectionné, fermeture et archivage sans suppression.
 12. Modmail : un membre écrit au bot en message privé ; le bot vérifie son appartenance au serveur puis relaie au salon du support **privé**. Le staff répond avec `!reply ID_UTILISATEUR message` dans ce salon, uniquement après un message entrant récent du membre (30 jours maximum). Avec plusieurs serveurs disponibles, le membre précise `!mail ID_SERVEUR son message`. 15 secondes minimum entre deux messages transmis. L'activation exige **Message Content Intent** pour lire les commandes du staff.
 13. Candidatures : publication d'un panneau à bouton, formulaire Discord avec pseudo, disponibilités et motivation, décision **Accepter/Refuser** réservée au rôle configuré ou aux gestionnaires de salons. Le candidat reçoit un MP seulement si ses paramètres de confidentialité l'autorisent. Le texte de candidature est envoyé au salon privé de validation, pas stocké dans l'historique local : seuls les statuts et identifiants sont conservés.
+14. Récompense de niveau : rôle automatique lorsqu'un membre atteint un niveau configuré (1 à 1 000). Il faut activer séparément XP et placer le rôle du bot au-dessus du rôle à attribuer. Les niveaux déjà atteints sont vérifiés lors du prochain message XP du membre.
+15. Récompense d'invitations : rôle attribué à l'invitant après un seuil de 1 à 1 000 arrivées attribuables. **Server Members Intent** et l'autorisation **Gérer le serveur** sont requis. Le suivi n'est pas exhaustif : Discord ne permet pas toujours d'attribuer une arrivée ni de retrouver les invitations expirées.
+16. Statistiques d'activité : compte les messages vus pendant que le bot tourne, sans stocker leur contenu. Le classement est affiché dans l'interface Windows.
+17. Avertissements manuels : formulaire d'administration locale réservé à l'interface de ton PC ; vérifie que l'ID correspond à un membre et journalise le motif dans un salon **privé**. L'historique récent (500 entrées maximum) et les totaux sont conservés localement. **Aucune sanction, aucun MP et aucun timeout automatiques**.
+
+L'interface montre également le classement des invitations identifiées, y compris si aucune récompense n'est activée. Il s'agit de nombres partiels et non d'un audit exhaustif des invitations historiques.
 
 L'onglet Modules dispose aussi de deux types d'événements ponctuels :
 
@@ -206,13 +212,14 @@ sur Windows. Le ZIP source reste disponible pour diagnostic et développement.
 
 ### Limitations actuelles
 
-Cette version configure les serveurs et exécute les dix modules locaux décrits
-ci-dessus, plus les arrivées, départs et invitations. La musique et les bots
-externes nécessitent toujours une autorisation distincte. Les **tickets privés
-interactifs**, les flux Twitch/TikTok/YouTube, les tournois automatisés, les
-jeux/music bots avec fournisseurs externes, l'anti-raid avancé et les autres
-idées du catalogue ne sont pas réalisés par le moteur natif. Les modèles
-« Support » créent des salons, **pas** un système de tickets interactifs complet.
+Cette version configure les serveurs et exécute les dix-sept modules locaux
+décrits ci-dessus, plus les arrivées, départs et invitations. La musique et les
+bots externes nécessitent toujours une autorisation distincte. Les flux
+Twitch/TikTok/YouTube, les tournois automatisés, les jeux/music bots avec
+fournisseurs externes, l'anti-raid avancé et les autres idées du catalogue non
+marquées « natives » ne sont pas réalisés par le moteur local. Les tickets
+interactifs sont disponibles via le module spécifique, pas uniquement en créant
+les salons d'un modèle « Support ».
 
 Cette application ne nécessite pas et ne lit pas le code de ton bot existant. Pour fusionner plus tard les systèmes persistants dans le même programme, il faudra récupérer le dépôt source de ton bot.
 

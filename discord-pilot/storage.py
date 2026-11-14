@@ -40,6 +40,9 @@ class State:
         self.state.setdefault("invite_counts", {})
         self.state.setdefault("modules", {})
         self.state.setdefault("xp_stats", {})
+        self.state.setdefault("message_stats", {})
+        self.state.setdefault("warnings", {})
+        self.state.setdefault("warning_totals", {})
         self.state.setdefault("daily_sent", {})
         self.state.setdefault("voice_rooms", {})
         self.state.setdefault("tickets", {})
@@ -144,6 +147,37 @@ class State:
         top = sorted(records.items(), key=lambda row: -int(row[1].get("xp", 0)))[:limit]
         return [{"member_id": member_id, "xp": int(record.get("xp", 0)),
                  "level": level_for_xp(int(record.get("xp", 0)))} for member_id, record in top]
+
+    def record_message_stat(self, guild_id: str, member_id: str) -> int:
+        records = self.state["message_stats"].setdefault(str(guild_id), {})
+        count = max(0, int(records.get(str(member_id), 0))) + 1
+        records[str(member_id)] = count
+        self.save()
+        return count
+
+    def activity_leaderboard(self, guild_id: str, limit: int = 20) -> list[dict]:
+        records = self.state["message_stats"].get(str(guild_id), {})
+        top = sorted(records.items(), key=lambda item: (-max(0, int(item[1])), item[0]))[:limit]
+        return [{"member_id": member_id, "messages": max(0, int(count))} for member_id, count in top]
+
+    def invite_leaderboard(self, guild_id: str, limit: int = 20) -> list[dict]:
+        records = self.state["invite_counts"].get(str(guild_id), {})
+        top = sorted(records.items(), key=lambda item: (-max(0, int(item[1])), item[0]))[:limit]
+        return [{"member_id": member_id, "invites": max(0, int(count))} for member_id, count in top]
+
+    def add_warning(self, guild_id: str, member_id: str, reason: str) -> dict:
+        history = self.state["warnings"].setdefault(str(guild_id), [])
+        totals = self.state["warning_totals"].setdefault(str(guild_id), {})
+        count = max(0, int(totals.get(str(member_id), 0))) + 1
+        totals[str(member_id)] = count
+        row = {"id": uuid4().hex, "member_id": str(member_id), "reason": reason,
+               "count": count, "at": datetime.now(timezone.utc).isoformat(),
+               "issuer": "administrateur local"}
+        history.append(row)
+        if len(history) > 500:
+            del history[:-500]
+        self.save()
+        return row
 
     def add_interactive_event(self, guild_id: str, row: dict) -> dict:
         records = self.state["interactive_events"].setdefault(str(guild_id), {})

@@ -148,7 +148,7 @@ class PilotBot(discord.Client):
                 self.manager.error = "Connexion réussie, mais impossible de mémoriser le token."
         if self.intents.members:
             for guild in self.guilds:
-                if STATE.automation_channel(str(guild.id), "invites"):
+                if self.tracks_invites(guild):
                     await self.refresh_invites(guild, bootstrap=True)
         # A locally run bot can be shut down while a temporary voice room is
         # still present. Reclaim only rooms explicitly created and tracked by us.
@@ -591,12 +591,27 @@ class PilotBot(discord.Client):
                 await message.add_reaction("👎")
             except (discord.Forbidden, discord.HTTPException):
                 self.manager.automation_warning = "Votes : permission Ajouter des réactions manquante."
+        if STATE.module(gid, "activity_stats").get("enabled"):
+            STATE.record_message_stat(gid, uid)
         xp = STATE.module(gid, "xp")
         if xp.get("enabled"):
             _, level, raised = STATE.record_xp(gid, uid, time.time())
             if raised and xp.get("channel_id"):
                 await self.send_module_message(message.guild, xp["channel_id"],
                                                f"🏆 <@{uid}> atteint le **niveau {level}** !", mention_users=True)
+            reward = STATE.module(gid, "level_rewards")
+            if reward.get("enabled") and level >= int(reward["level"]):
+                await self.grant_reward(message.guild, message.author, reward["role_id"], "niveau XP")
+
+    async def grant_reward(self, guild, member, role_id, reason):
+        role = guild.get_role(int(role_id))
+        if role is None or any(getattr(existing, "id", None) == role.id
+                               for existing in getattr(member, "roles", [])):
+            return
+        try:
+            await member.add_roles(role, reason=f"Discord Pilot : récompense {reason}")
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            self.manager.automation_warning = f"Récompense {reason} : permissions Gérer les rôles ou hiérarchie insuffisante."
 
     async def moderate_message(self, message, reason):
         try:
@@ -700,6 +715,12 @@ class PilotBot(discord.Client):
             STATE.seed_invite_counts(str(guild.id), snapshot)
         return snapshot
 
+    @staticmethod
+    def tracks_invites(guild):
+        gid = str(guild.id)
+        return bool(STATE.automation_channel(gid, "invites") or
+                    STATE.module(gid, "invite_rewards").get("enabled"))
+
     async def on_invite_create(self, invite):
         snapshot = self.invite_snapshots.get(invite.guild.id)
         if snapshot is not None:
@@ -738,7 +759,7 @@ class PilotBot(discord.Client):
             await self.send_automation(member.guild, "welcome",
                                        f"👋 Bienvenue sur **{discord.utils.escape_markdown(member.guild.name)}**, {member.mention} !",
                                        mention_users=True)
-        if not STATE.automation_channel(str(member.guild.id), "invites"):
+        if not self.tracks_invites(member.guild):
             return
         async with self.invite_locks.setdefault(member.guild.id, asyncio.Lock()):
             previous = self.invite_snapshots.get(member.guild.id)
@@ -760,6 +781,13 @@ class PilotBot(discord.Client):
             await self.send_automation(member.guild, "invites",
                                        f"🎉 <@{inviter_id}> vient d'inviter sa **{invite_ordinal(count)}** personne sur le serveur !",
                                        mention_users=True)
+            reward = STATE.module(str(member.guild.id), "invite_rewards")
+            if reward.get("enabled") and count >= int(reward["invites"]):
+                try:
+                    inviter = member.guild.get_member(int(inviter_id)) or await member.guild.fetch_member(int(inviter_id))
+                    await self.grant_reward(member.guild, inviter, reward["role_id"], "d'invitations")
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    self.manager.automation_warning = "Récompense d'invitations : invitant introuvable ou accès Discord refusé."
 
     async def on_member_remove(self, member):
         await self.send_automation(member.guild, "farewell",
@@ -780,7 +808,8 @@ class BotManager:
     def needed_intents() -> tuple[bool, bool]:
         member = any(config for config in STATE.state.get("automations", {}).values())
         modules = STATE.state.get("modules", {})
-        member = member or any(settings.get("autorole", {}).get("enabled")
+        member = member or any(settings.get("autorole", {}).get("enabled") or
+                               settings.get("invite_rewards", {}).get("enabled")
                                for settings in modules.values())
         content = any(settings.get(name, {}).get("enabled")
                       for settings in modules.values() for name in ("antilinks", "wordfilter", "modmail"))
@@ -865,7 +894,7 @@ class BotManager:
                                    member_events=member_required, content_events=content_required)
             return
         if self.bot.intents.members:
-            if STATE.automation_channel(str(guild.id), "invites"):
+            if self.bot.tracks_invites(guild):
                 await self.bot.refresh_invites(guild, bootstrap=True)
 
     def get_guild(self, guild_id: str):
@@ -1133,6 +1162,9 @@ async def api_modules(request):
         "members_intent": bool(guild and MANAGER.bot.intents.members),
         "content_intent": bool(guild and MANAGER.bot.intents.message_content),
         "leaderboard": STATE.leaderboard(guild_id),
+        "invite_leaderboard": STATE.invite_leaderboard(guild_id),
+        "activity_leaderboard": STATE.activity_leaderboard(guild_id),
+        "warnings": STATE.state["warnings"].get(guild_id, [])[-30:][::-1],
         "guild_id": guild_id,
     })
 
@@ -1158,6 +1190,46 @@ async def api_module_update(request):
     await MANAGER.activate_automations(guild)
     return web.json_response({"ok": True, "settings": settings, "warning": warning,
                               "note": "Configuration enregistrée ; fonctionnement seulement lorsque le bot est connecté."})
+
+
+async def api_warning_create(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if guild is None:
+        raise ValueError("Connecte le bot à ce serveur pour enregistrer un avertissement.")
+    cfg = STATE.module(guild_id, "warnings")
+    if not cfg.get("enabled"):
+        raise ValueError("Active d'abord le module Avertissements manuels.")
+    data = await body_json(request)
+    if set(data) != {"member_id", "reason"}:
+        raise ValueError("Identifiant du membre et motif requis, sans autre paramètre.")
+    member_id = data["member_id"]
+    if not isinstance(member_id, str) or not ID_RE.fullmatch(member_id):
+        raise ValueError("Identifiant Discord du membre invalide.")
+    reason = data["reason"]
+    if not isinstance(reason, str) or not 2 <= len(reason.strip()) <= 300:
+        raise ValueError("Motif requis (2 à 300 caractères).")
+    reason = reason.strip()
+    channel = guild.get_channel(int(cfg["channel_id"]))
+    if not isinstance(channel, discord.TextChannel) or channel.permissions_for(guild.default_role).view_channel:
+        raise ValueError("Le salon des avertissements doit rester un salon textuel privé.")
+    try:
+        member = guild.get_member(int(member_id)) or await guild.fetch_member(int(member_id))
+    except discord.NotFound as exc:
+        raise ValueError("Ce membre n'est pas présent sur le serveur.") from exc
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise ValueError("Impossible de vérifier le membre auprès de Discord.") from exc
+    async with LOCKS.setdefault(f"warning:{guild_id}", asyncio.Lock()):
+        count = int(STATE.state["warning_totals"].get(guild_id, {}).get(member_id, 0)) + 1
+        try:
+            await channel.send(f"⚠️ **Avertissement #{count}** — {discord.utils.escape_markdown(member.display_name)} "
+                               f"(ID `{member_id}`)\nMotif : {discord.utils.escape_markdown(reason)}",
+                               allowed_mentions=discord.AllowedMentions.none())
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            raise ValueError("Le bot ne peut pas publier dans le salon privé : avertissement non enregistré.") from exc
+        row = STATE.add_warning(guild_id, member_id, reason)
+    return web.json_response({"ok": True, "warning": row,
+                              "note": "Avertissement journalisé. Aucun timeout, kick ou bannissement appliqué."})
 
 
 async def api_interactive(request):
@@ -1626,6 +1698,7 @@ def build_app():
     app.router.add_get("/api/history/{guild_id}", api_history)
     app.router.add_get("/api/modules/{guild_id}", api_modules)
     app.router.add_post("/api/modules/{guild_id}/{module}", api_module_update)
+    app.router.add_post("/api/community/{guild_id}/warn", api_warning_create)
     app.router.add_get("/api/interactive/{guild_id}", api_interactive)
     app.router.add_post("/api/interactive/{guild_id}/tickets/panel", api_ticket_panel)
     app.router.add_post("/api/interactive/{guild_id}/applications/panel", api_application_panel)
