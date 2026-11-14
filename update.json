@@ -1,7 +1,7 @@
 {
-  "version": "0.5.2",
-  "url": "https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.2/DiscordPilot_Source.zip",
-  "sha256": "d2c5e284d01bbd1191cbc339e8f212cab00f2b4c6c2bc53ff09f60f3aec06c04",
-  "exe_url": "https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.2/DiscordPilot.exe",
-  "exe_sha256": "4cd5a19dffeb136c0f42eb718c51cd8004f543e32faf068d88512bf2de6e0508"
+  "version": "0.5.3",
+  "url": "https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.3/DiscordPilot_Source.zip",
+  "sha256": "5126b376d758c5de4f66b4189b39863da75034a59387ac17c8ea809f4b06eb0b",
+  "exe_url": "https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.3/DiscordPilot.exe",
+  "exe_sha256": "fbf04bd012f5d3ba351eb0678adaf3d73b70929d40a48f0c812ff506343b7c6a"
 }
