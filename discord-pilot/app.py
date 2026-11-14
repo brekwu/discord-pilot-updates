@@ -246,7 +246,10 @@ def transcribe_voice_audio(payload: bytes, data_root: Path, mime_type: str) -> d
 async def api_transcribe(request):
     if request.content_type not in VOICE_MIME_TYPES:
         raise ValueError("Envoie un enregistrement WebM, Ogg, MP4 ou WAV pour la transcription.")
-    payload = await request.content.read(MAX_VOICE_BYTES + 1)
+    # StreamReader.read(n) may return only the first network packet! Drain the
+    # complete body before decoding; otherwise multi-second recordings become
+    # an incomplete WAV/WebM containing just the first spoken words.
+    payload = await request.read()
     if len(payload) > MAX_VOICE_BYTES:
         raise ValueError("Enregistrement trop volumineux.")
     try:
