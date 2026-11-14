@@ -52,7 +52,7 @@
             <div class="stat-card"><span>Demandes</span><strong id="statPlans">—</strong><small>Plans enregistrés</small><b class="stat-icon blue">▤</b></div>
           </div>
 
-          <div class="tabs" role="tablist"><button data-tab="studio" class="tab active">✦ Studio IA <span class="badge-new">LOCAL</span></button><button data-tab="catalog" class="tab">✧ Intégrations <span class="badge-new">90 IDÉES</span></button><button data-tab="structure" class="tab">▦ Structure du serveur</button><button data-tab="history" class="tab">◷ Historique</button></div>
+          <div class="tabs" role="tablist"><button data-tab="studio" class="tab active">✦ Studio IA <span class="badge-new">LOCAL</span></button><button data-tab="modules" class="tab">⚙ Modules actifs <span class="badge-new">10 NATIFS</span></button><button data-tab="catalog" class="tab">✧ Intégrations <span class="badge-new">90 IDÉES</span></button><button data-tab="structure" class="tab">▦ Structure du serveur</button><button data-tab="history" class="tab">◷ Historique</button></div>
 
           <section id="studioTab" class="tab-panel">
             <div class="studio-header"><div><h3>Que veux-tu faire ?</h3><p>Décris les modifications de ton serveur comme tu le ferais à un assistant.</p></div><div class="assistant-badge">✦ <span>Assistant de configuration</span></div></div>
@@ -72,6 +72,13 @@
             <div class="examples"><button data-example="Crée une catégorie ACCUEIL avec les salons bienvenue, reglement et annonces">Créer une catégorie avec 3 salons <span>↗</span></button><button data-example="Crée les rôles Membre, Modérateur et VIP">Créer plusieurs rôles <span>↗</span></button><button data-example="Crée un salon vocal Général dans la catégorie COMMUNAUTÉ">Créer un salon vocal <span>↗</span></button></div>
           </section>
 
+          <section id="modulesTab" class="tab-panel" hidden>
+            <div class="section-heading"><div><h3>Modules réellement exécutés par ton bot</h3><p>Active chaque fonction serveur par serveur, choisis ses salons et rôles. Elles fonctionnent tant que ton application Windows est ouverte et le bot connecté.</p></div><button id="refreshModules" class="outline-button">↻ Vérifier</button></div>
+            <div id="moduleStatus" class="catalog-disclaimer">Sélectionne un serveur connecté pour configurer les modules.</div>
+            <div id="moduleGrid" class="module-grid"></div>
+            <div class="section-heading"><div><h3>Classement XP</h3><p>Les scores sont conservés localement. Seuls les messages reçus quand le bot est connecté sont comptés.</p></div></div>
+            <div id="moduleLeaderboard" class="module-leaderboard"></div>
+          </section>
           <section id="catalogTab" class="tab-panel" hidden>
             <div class="section-heading"><div><h3>Catalogue d'intégrations</h3><p>90 fonctionnalités utiles. Les services externes nécessitent ton autorisation Discord ; les idées sans intégration ne sont pas présentées comme installées.</p></div><span id="catalogCount">CHARGEMENT…</span></div>
             <div class="catalog-filters">
