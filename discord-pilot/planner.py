@@ -134,9 +134,11 @@ def parse_ollama_decision(text: str) -> tuple[list[dict[str, str]], str | None]:
 SYSTEM_PROMPT = """Tu es l'assistant local Discord Pilot. Tu comprends le français familier, le franglais
 (channel = salon, vocal = salon vocal, chan = salon), les fautes de frappe et les demandes en plusieurs phrases.
 Tu proposes un plan de configuration Discord, jamais une exécution directe.
-Réponds SEULEMENT avec {"actions":[...]}, OU {"actions":[],"question":"..."} si une information
-indispensable manque (par exemple « rajoute un channel » sans nom : demande quel nom lui donner).
-Ne devine jamais des noms, des messages à publier, des catégories ou des cibles de suppression.
+Réponds SEULEMENT avec {"actions":[...]}. L'application prépare un brouillon qui devra être
+validé par l'utilisateur : n'entame pas une conversation de questions ou de précisions.
+Si le nom d'un NOUVEAU salon manque, propose « nouveau-salon » ; si le nom d'un NOUVEAU
+rôle manque, « Nouveau rôle » ; si le nom d'une NOUVELLE catégorie manque, « NOUVELLE CATÉGORIE ».
+Ne devine jamais des messages à publier, des éléments à modifier ou des cibles de suppression.
 Types autorisés et champs EXACTS :
 create_category {type,name}
 create_text_channel {type,name,category? ,topic?}
@@ -151,8 +153,7 @@ delete_channel {type,name} (uniquement si demandé explicitement)
 delete_role {type,name} (uniquement si demandé explicitement)
 Pour les catégories, crée-les avant les salons. Utilise un plan précis, 40 actions maximum.
 Ne crée jamais de rôle Administrateur avec des permissions dangereuses et n'ajoute aucun droit d'administrateur.
-Si la demande est ambiguë, réponds avec une question claire et courte, sans actions.
-Si la demande n'indique aucune action concrète parmi celles-ci, réponds {"actions":[],"question":"Quelle modification précise veux-tu faire ?"}.
+Si aucune action concrète sûre n'est possible, réponds {"actions":[]}.
 Ne propose aucune action implicite en dehors de la demande. Évite les doublons.
 """
 
@@ -168,6 +169,48 @@ def missing_information(prompt: str) -> str | None:
         if re.search(r"\bcategorie\b$", normalized):
             return "Quel nom veux-tu donner à la catégorie ?"
     return None
+
+
+def collapse_old_clarifications(prompt: str) -> str:
+    """Remove obsolete 'Précision :' lines appended by older versions of the UI.
+
+    Prefer the original request if it already names the actions. Otherwise a
+    single name supplied in a previous answer can complete a simple creation.
+    """
+    lines = prompt.splitlines()
+    details = [line.split(":", 1)[1].strip() for line in lines
+               if re.match(r"^\s*pr[eé]cision\s*:", line, re.I)]
+    if not details:
+        return prompt.strip()
+    original = "\n".join(line for line in lines
+                         if not re.match(r"^\s*pr[eé]cision\s*:", line, re.I)).strip()
+    if not original:
+        return prompt.strip()
+    if local_parse(original):
+        return original
+    if missing_information(original):
+        name = clean_name(details[-1])
+        if 1 <= len(name) <= 80:
+            return f"{original} {name}"
+    return original
+
+
+def default_creation_plan(prompt: str) -> list[dict[str, str]]:
+    """For incomplete *creation* requests propose reversible draft defaults."""
+    if not missing_information(prompt):
+        return []
+    normalized = norm(prompt).strip(" .!?")
+    if re.search(r"\b(?:channels?|chan|canal|canaux|salons?)\b", normalized):
+        category = re.search(r"\bdans\s+(?:la\s+)?cat[eé]gorie\s+(.+)$", prompt, re.I)
+        payload = {"name": "nouveau-salon"}
+        if category:
+            payload["category"] = clean_name(category.group(1))
+        return validate_actions([action("create_text_channel", **payload)])
+    if re.search(r"\broles?\b", normalized):
+        return validate_actions([action("create_role", name="Nouveau rôle")])
+    if re.search(r"\bcategorie\b", normalized):
+        return validate_actions([action("create_category", name="NOUVELLE CATÉGORIE")])
+    return []
 
 
 PRESETS = {
