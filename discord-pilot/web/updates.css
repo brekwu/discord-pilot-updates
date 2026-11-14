@@ -1,0 +1,19 @@
+.update-button{border-color:#584470!important;color:#d8c6fa!important}
+.update-button span{color:#aaa0bf;margin-left:5px}
+.update-button.available{color:#9df0bc!important;border-color:#438362!important}
+.update-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
+.update-row button{flex:1}
+.update-status{border:1px solid #3a324f;border-radius:10px;padding:12px;margin-top:12px;color:#c2b5d8;background:#191627;font-size:11px;line-height:1.65}
+.update-status.good{color:#9ce6bb;border-color:#3a6654}
+@media(max-width:710px){.update-button{padding:7px!important;font-size:10px!important}.update-button span{display:none}}
+
+/* Speech-to-text stays active while the user works in another window. */
+.composer-actions{display:flex;align-items:center;gap:9px}
+.voice-button{border:1px solid #7453a6;background:#302443;color:#e3d4ff;border-radius:10px;padding:12px 15px;font-size:11px;font-weight:800;white-space:nowrap;cursor:pointer}
+.voice-button:hover{background:#44315e;border-color:#a37aff}
+.voice-button.recording{border-color:#ff778b;background:#6b233c;color:#fff;box-shadow:0 0 0 3px #ef507422}
+.voice-button.recording::before{content:'●';color:#ff9baf;margin-right:7px;animation:voicepulse 1.2s ease-in-out infinite}
+.voice-button:disabled{opacity:.6;cursor:wait}
+.voice-status{font-size:11px;line-height:1.6;color:#c5acd9;padding:0 22px 12px}
+@keyframes voicepulse{50%{opacity:.3}}
+@media(max-width:710px){.composer-actions{width:100%}.composer-actions .voice-button{min-width:116px}.composer-actions .primary-button{flex:1;min-width:0;width:auto}}
