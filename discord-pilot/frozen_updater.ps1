@@ -56,6 +56,10 @@ function Start-DiscordPilot {
     $env:DISCORD_PILOT_PORT = [string]$Port
     $env:DISCORD_PILOT_NO_BROWSER = '1'
     $env:DISCORD_PILOT_RESTART_PROBE = '1'
+    # REQUIRED by PyInstaller --onefile for a process that outlives its parent.
+    # Otherwise the new process reuses the old _MEIPASS extraction directory,
+    # already removed by the old bootloader, and never starts its HTTP server.
+    $env:PYINSTALLER_RESET_ENVIRONMENT = '1'
     $child = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path -Parent $ExePath) -PassThru -ErrorAction Stop
     Write-UpdateLog "EXE relance; PID=$($child.Id), port=$Port"
     return $child
