@@ -103,7 +103,9 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Modules natifs locaux (v0.5.9)
+### Modules natifs locaux (v0.5.10)
+
+**Correction v0.5.10 du planificateur IA :** accepte désormais certaines réponses JSON courantes d'Ollama (`plan`, `commands`, `result`, ou une action unique) tout en appliquant exactement la même liste d'actions autorisées. « Active les statistiques des messages » peut être traité localement sans dépendre d'Ollama. Si le modèle ne peut toujours pas produire un plan, l'application explique les opérations possibles et propose l'onglet Modules actifs pour les fonctions nécessitant des paramètres ; elle n'invente pas une action à exécuter.
 
 L'onglet **Modules actifs** contient dix-sept modules **réellement développés**,
 désactivés au départ et configurés séparément pour chaque serveur :

@@ -163,7 +163,7 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
                 fields[key] = compact(item[key])
         if kind == "suggest_integration" and fields["provider"] not in PROVIDERS:
             raise ValueError("Application externe non référencée dans le catalogue officiel de Discord Pilot.")
-        if kind == "set_module" and (fields["module"] not in {"xp", "antispam", "antilinks"}
+        if kind == "set_module" and (fields["module"] not in {"xp", "antispam", "antilinks", "activity_stats"}
                                      or fields["enabled"] not in {"true", "false"}):
             raise ValueError("Ce module ne peut pas être piloté sans paramètres. Ouvre l'onglet Modules actifs.")
         if kind == "send_message" and len(fields["content"]) > 1800:
@@ -252,9 +252,25 @@ def parse_ollama_decision(text: str) -> tuple[list[dict[str, str]], str | None]:
     result = json.loads(text)
     if isinstance(result, dict):
         question = result.get("question")
-        actions = result.get("actions", result.get("operations", result.get("steps", [])))
+        action_keys = ("actions", "operations", "steps", "commands", "plan", "result")
+        available = [result[key] for key in action_keys if key in result and result[key]]
+        if len(available) > 1:
+            raise ValueError("La réponse de l'IA contient plusieurs plans contradictoires.")
+        actions = available[0] if available else []
+        # Small Ollama models regularly wrap a correct array in `plan` or
+        # return one action as an object. Both still pass strict validation.
+        for _ in range(2):
+            if isinstance(actions, dict) and not ("type" in actions or "action" in actions):
+                nested = [actions[key] for key in action_keys if key in actions and actions[key]]
+                if len(nested) > 1:
+                    raise ValueError("La réponse de l'IA contient plusieurs plans contradictoires.")
+                actions = nested[0] if nested else []
+            else:
+                break
         if not actions and ("type" in result or "action" in result):
-            actions = [result]
+            actions = result
+        if isinstance(actions, dict):
+            actions = [actions]
         if actions:
             return normalize_model_actions(actions), None
         if isinstance(question, str) and 5 <= len(question.strip()) <= 300:
@@ -279,6 +295,7 @@ create_role {type,name,color?} (color: hex #RRGGBB uniquement)
 configure_welcome {type,channel} (envoie un message lorsqu'un membre rejoint)
 configure_farewell {type,channel} (envoie un message lorsqu'un membre quitte)
 configure_invites {type,channel} (annonce chaque invitation attribuable et son compteur)
+set_module {type,module,enabled} (module: xp, antispam, antilinks ou activity_stats uniquement ; enabled: "true" ou "false")
 rename_channel {type,name,new_name}
 rename_role {type,name,new_name}
 set_topic {type,name,topic}
@@ -287,6 +304,10 @@ make_private {type,name,role} (role existant ou à créer; aucun accès pour @ev
 delete_channel {type,name} (uniquement si demandé explicitement)
 delete_role {type,name} (uniquement si demandé explicitement)
 Pour les catégories, crée-les avant les salons. Utilise un plan précis, 40 actions maximum.
+Exemple : demande « Crée un salon annonces et un rôle Membre » ->
+{"actions":[{"type":"create_text_channel","name":"annonces"},{"type":"create_role","name":"Membre"}]}.
+Ne confonds pas activation d'une fonctionnalité avancée et création d'un salon.
+Les modules à paramètres (récompenses, avertissements, tickets, candidatures) se règlent dans l'onglet Modules actifs.
 Ne crée jamais de rôle Administrateur avec des permissions dangereuses et n'ajoute aucun droit d'administrateur.
 Si aucune action concrète sûre n'est possible, réponds {"actions":[]}.
 Ne propose aucune action implicite en dehors de la demande. Évite les doublons.

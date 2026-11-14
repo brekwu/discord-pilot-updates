@@ -68,6 +68,8 @@ class ModuleLogicTests(unittest.TestCase):
                          [{"type": "set_module", "module": "antispam", "enabled": "false"}])
         self.assertEqual(app.native_module_plan("Active l'XP et la musique"), [])
         self.assertEqual(app.native_module_plan("Configure des salons avec les XP"), [])
+        self.assertEqual(app.native_module_plan("Active les statistiques des messages"),
+                         [{"type": "set_module", "module": "activity_stats", "enabled": "true"}])
 
     def test_every_module_opt_in_and_strict_config(self):
         guild = FakeGuild()
