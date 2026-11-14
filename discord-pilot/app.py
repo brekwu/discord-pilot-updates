@@ -92,9 +92,9 @@ class PilotBot(discord.Client):
         if self.intents.members:
             for guild in self.guilds:
                 if STATE.automation_channel(str(guild.id), "invites"):
-                    await self.refresh_invites(guild)
+                    await self.refresh_invites(guild, bootstrap=True)
 
-    async def refresh_invites(self, guild):
+    async def refresh_invites(self, guild, bootstrap=False):
         try:
             invites = await guild.invites()
         except (discord.Forbidden, discord.HTTPException):
@@ -104,6 +104,8 @@ class PilotBot(discord.Client):
         snapshot = {inv.code: (inv.uses or 0, inv.inviter.id if inv.inviter else None)
                     for inv in invites}
         self.invite_snapshots[guild.id] = snapshot
+        if bootstrap:
+            STATE.seed_invite_counts(str(guild.id), snapshot)
         return snapshot
 
     async def on_invite_create(self, invite):
@@ -141,7 +143,7 @@ class PilotBot(discord.Client):
         async with self.invite_locks.setdefault(member.guild.id, asyncio.Lock()):
             previous = self.invite_snapshots.get(member.guild.id)
             if previous is None:
-                await self.refresh_invites(member.guild)
+                await self.refresh_invites(member.guild, bootstrap=True)
                 return  # No trustworthy baseline after reconnect or missing permission.
             current = await self.refresh_invites(member.guild)
             if current is None:
@@ -239,7 +241,7 @@ class BotManager:
             return
         if self.bot.intents.members:
             if STATE.automation_channel(str(guild.id), "invites"):
-                await self.bot.refresh_invites(guild)
+                await self.bot.refresh_invites(guild, bootstrap=True)
         elif self.current_token:
             # Gateway intents cannot be changed on an existing connection.
             await self.connect(self.current_token, self.remember, member_events=True)

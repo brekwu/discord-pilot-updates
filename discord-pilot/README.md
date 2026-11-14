@@ -94,11 +94,14 @@ Pour attribuer une invitation, le bot doit aussi avoir la permission
 demande ces permissions sans demander Administrateur. Pour un bot déjà invité,
 accorde les autorisations via les rôles Discord.
 
-Le compteur commence aux invitations **attribuées pendant que Discord Pilot est
-en ligne**. Discord ne garantit pas l'identification de l'invitant pour les
-liens vanity, les invitations retirées ou plusieurs arrivées simultanées.
-Dans ces cas, aucun compte n'est inventé. Le compteur validé est conservé
-entre les redémarrages de l'application.
+Le compteur démarre avec le nombre d'utilisations encore **visibles sur les
+liens d'invitation Discord actifs**, puis augmente pour les arrivées attribuées
+pendant que Discord Pilot est en ligne. Par exemple, un lien à dix utilisations
+produit bien « onzième » lors de sa prochaine invitation identifiable. Discord
+ne permet pas de reconstituer les liens supprimés, vanity ou les arrivées
+manquées pendant que le bot est fermé : ce total peut donc être inférieur au
+nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
+Le maximum du compteur confirmé est conservé entre les redémarrages.
 
 Sépare plusieurs instructions distinctes par un **point-virgule**. Le moteur sans IA couvre une liste volontairement limitée d'opérations ; si une demande est trop complexe, il refuse au lieu d'exécuter une partie silencieusement.
 
