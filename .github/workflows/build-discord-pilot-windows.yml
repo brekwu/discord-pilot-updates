@@ -39,7 +39,7 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer les correctifs 0.5.0 de capture et reception audio complete
+      - name: Appliquer les correctifs 0.5.0 avec decodeurs Opera dans l EXE
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
@@ -67,7 +67,7 @@ jobs:
       - name: Construire un exécutable unique
         working-directory: buildsrc/discord-pilot
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name DiscordPilot --collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers --collect-all huggingface_hub --add-data "web;web" --add-data "version.json;." --add-data "frozen_updater.ps1;." windows_entrypoint.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name DiscordPilot --collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers --collect-all huggingface_hub --collect-all av --add-data "web;web" --add-data "version.json;." --add-data "frozen_updater.ps1;." windows_entrypoint.py
 
       - name: Démarrer et tester l'EXE réel sous Windows
         shell: pwsh
