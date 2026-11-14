@@ -118,9 +118,11 @@ jobs:
             $listener.Stop()
           }
 
-      - name: Tester installation et redemarrage automatique de l EXE deja installe
+      - name: Tester installation et redemarrage automatique avec PowerShell Windows 5.1
         shell: pwsh
         run: |
+          # The EXE launches its own powershell.exe 5.1 helper, regardless of
+          # the PowerShell 7 shell used by the GitHub Actions test.
           # Isolate the installed EXE and user state from the build directory.
           $installed = Join-Path $PWD 'update-e2e/DiscordPilot.exe'
           New-Item -ItemType Directory -Force -Path (Split-Path $installed -Parent) | Out-Null
