@@ -24,12 +24,16 @@ class IntegrationRoutingTests(unittest.TestCase):
         self.assertEqual(len({f["id"] for f in features}), 90)
         self.assertEqual(features[-1]["title"], "Sauvegarde et restauration du serveur")
         for feature in features:
+            if feature["native_module"]:
+                self.assertEqual(feature["availability"], "native")
+                continue
             if feature["provider_id"]:
                 provider = PROVIDERS[feature["provider_id"]]
                 self.assertEqual(feature["availability"], "external")
                 self.assertTrue(provider["url"].startswith("https://"))
             else:
                 self.assertEqual(feature["availability"], "planned")
+        self.assertEqual(sum(bool(feature["native_module"]) for feature in features), 6)
 
     def test_recognize_multiple_requests_and_do_not_falsely_claim_installation(self):
         self.assertEqual(recommended_providers(
@@ -52,10 +56,11 @@ class IntegrationRoutingTests(unittest.TestCase):
 class IntegrationApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.original = app.STATE
+        self.original, self.original_port = app.STATE, app.PORT
         app.STATE = State(Path(self.tmp.name))
         self.server = TestServer(app.build_app(), host="127.0.0.1")
         await self.server.start_server()
+        app.PORT = self.server.port
         self.client = TestClient(self.server)
         await self.client.start_server()
         boot = await (await self.client.get("/api/bootstrap")).json()
@@ -63,7 +68,7 @@ class IntegrationApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.client.close()
-        app.STATE = self.original
+        app.STATE, app.PORT = self.original, self.original_port
         self.tmp.cleanup()
 
     async def test_catalogue_is_readonly_and_safe(self):
