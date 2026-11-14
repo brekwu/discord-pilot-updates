@@ -62,28 +62,69 @@ async function simulateUpdate({portChanged}) {
   }
 }
 
-async function testVoiceWav() {
+async function testVoiceRecorderPreservesAllChunks() {
   const ctx = {document: {}, localStorage: {getItem: () => ""}, Blob};
   vm.createContext(ctx);
   vm.runInContext(source, ctx, {filename: "web/app.js"});
-  // Voice recorder writes a standard signed PCM WAV that Vosk can read.
-  const blob = vm.runInContext("voiceWav([new Float32Array(48000).fill(0.25)], 48000)", ctx);
-  assert.equal(blob.type, "audio/wav");
-  const bytes = await blob.arrayBuffer();
-  const view = new DataView(bytes);
-  const ascii = (offset, count) => Buffer.from(bytes, offset, count).toString("ascii");
-  assert.equal(ascii(0, 4), "RIFF");
-  assert.equal(ascii(8, 4), "WAVE");
-  assert.equal(view.getUint16(22, true), 1, "must be mono");
-  assert.equal(view.getUint32(24, true), 16000, "must be 16 kHz");
-  assert.equal(view.getUint16(34, true), 16, "must be 16-bit PCM");
-  assert.equal(blob.size, 44 + 16000 * 2, "48 kHz one-second input must resample to 16k");
-  assert.ok(view.getInt16(44, true) > 8000, "resampled audio must contain microphone samples");
+  const blob = vm.runInContext("buildVoiceBlob([new Blob([new Uint8Array(2048).fill(1)]), new Blob([new Uint8Array(3072).fill(2)])], 'audio/webm')", ctx);
+  assert.equal(blob.type, "audio/webm");
+  assert.equal(blob.size, 5120, "all chunks, including final data, must be preserved");
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  assert.equal(bytes[0], 1);
+  assert.equal(bytes[2047], 1);
+  assert.equal(bytes[2048], 2);
+  assert.equal(bytes[5119], 2);
+}
+
+async function testFullMicrophoneLifecycle() {
+  const elements = {
+    voiceButton: {disabled: false, textContent: "", classList: {add() {}, remove() {}}},
+    voiceStatus: {hidden: true, textContent: ""},
+    voicePreview: {hidden: true, src: ""},
+    requestText: {value: "", maxLength: 8000, dispatchEvent() {}},
+  };
+  let sent = null;
+  const stream = {getTracks: () => [{stop() {}}]};
+  class Recorder {
+    static isTypeSupported(type) {return type === "audio/webm;codecs=opus";}
+    constructor(_stream, options) {this.mimeType = options.mimeType; this.state = "inactive"; this.listeners = {};}
+    start() {this.state = "recording"; this.ondataavailable({data: new Blob([new Uint8Array(2200).fill(7)])});}
+    addEventListener(name, fn) {this.listeners[name] = fn;}
+    stop() {
+      this.state = "inactive";
+      // Final chunk is only emitted when stop() is called.
+      this.ondataavailable({data: new Blob([new Uint8Array(2300).fill(9)])});
+      this.listeners.stop();
+    }
+  }
+  const ctx = {
+    document: {getElementById: id => elements[id]},
+    localStorage: {getItem: () => ""},
+    window: {MediaRecorder: Recorder},
+    navigator: {mediaDevices: {getUserMedia: async () => stream}},
+    Blob, Event,
+    URL: {createObjectURL: () => "blob:recorded", revokeObjectURL() {}},
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    fetch: async (path, options) => {
+      assert.equal(path, "/api/transcribe");
+      sent = options;
+      return {ok: true, json: async () => ({text: "je veux créer un salon puis un deuxième", seconds: 5, segments: 2})};
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, {filename: "web/app.js"});
+  await vm.runInContext("beginVoiceRecording()", ctx);
+  await vm.runInContext("finishVoiceRecording()", ctx);
+  assert.equal(sent.body.size, 4500, "final recorded chunk must reach the server");
+  assert.equal(sent.headers["Content-Type"], "audio/webm;codecs=opus");
+  assert.equal(elements.requestText.value, "je veux créer un salon puis un deuxième");
+  assert.equal(elements.voicePreview.hidden, false, "the user should be able to replay audio");
 }
 
 (async () => {
-  await testVoiceWav();
+  await testVoiceRecorderPreservesAllChunks();
+  await testFullMicrophoneLifecycle();
   await simulateUpdate({portChanged: false});
   await simulateUpdate({portChanged: true});
-  process.stdout.write("Frontend tests OK: microphone WAV, restart, asset availability, port recovery.\n");
+  process.stdout.write("Frontend tests OK: background recorder chunks, playback, transcription, update recovery.\n");
 })().catch(error => {console.error(error); process.exitCode = 1;});
