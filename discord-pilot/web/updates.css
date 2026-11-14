@@ -14,6 +14,8 @@
 .voice-button.recording{border-color:#ff778b;background:#6b233c;color:#fff;box-shadow:0 0 0 3px #ef507422}
 .voice-button.recording::before{content:'●';color:#ff9baf;margin-right:7px;animation:voicepulse 1.2s ease-in-out infinite}
 .voice-button:disabled{opacity:.6;cursor:wait}
+.voice-preview{display:block;width:100%;height:42px;margin:10px 0 0;border-radius:12px}
+.voice-preview[hidden]{display:none}
 .voice-status{font-size:11px;line-height:1.6;color:#c5acd9;padding:0 22px 12px}
 @keyframes voicepulse{50%{opacity:.3}}
 @media(max-width:710px){.composer-actions{width:100%}.composer-actions .voice-button{min-width:116px}.composer-actions .primary-button{flex:1;min-width:0;width:auto}}
