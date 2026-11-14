@@ -115,7 +115,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $exe = (Resolve-Path 'buildsrc/discord-pilot/dist/DiscordPilot.exe').Path
-          Compress-Archive -Path 'buildsrc/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
+          $sourceRoot = Join-Path $PWD 'source-clean/discord-pilot'
+          New-Item -ItemType Directory -Force -Path $sourceRoot | Out-Null
+          $allowed = @('app.py', 'planner.py', 'storage.py', 'discord_ops.py', 'updater.py', 'updater_cli.py', 'requirements.txt', 'version.json', 'README.md', 'web/index.html', 'web/app.js', 'web/style.css', 'web/updates.css', 'LANCER_DISCORD_PILOT.bat', 'DEMARRER_DISCORD_PILOT.cmd', 'demarrer.ps1', 'CONSTRUIRE_EXE_WINDOWS.bat')
+          foreach ($relative in $allowed) {
+            $destination = Join-Path $sourceRoot $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+            Copy-Item -LiteralPath (Join-Path 'buildsrc/discord-pilot' $relative) -Destination $destination -Force
+          }
+          Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
           $notes = 'Corrige le refus des tokens basé uniquement sur leur longueur. La vérification est désormais réalisée par Discord, et le studio affiche la réponse avant de fermer la fenêtre. Test Windows : démarrage normal et port occupé. Le raccordement à un vrai bot exige le token personnel de son propriétaire.'
-          gh release create v0.4.2 $exe $archive --title 'Discord Pilot 0.4.2 — connexion du bot' --notes $notes --latest
+          gh release upload v0.4.2 $exe $archive --clobber
