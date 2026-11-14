@@ -1,10 +1,10 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], catalog: {features: [], providers: {}}, busy: false, updateAvailable: false };
+const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], catalog: {features: [], providers: {}}, moduleData: null, busy: false, updateAvailable: false };
 // No personal server identifiers are shipped in public updates; Discord provides real names after login.
 const known = {};
-const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations", suggest_integration: "Installer un bot externe (autorisation requise)" };
+const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations", suggest_integration: "Installer un bot externe (autorisation requise)", set_module: "Configurer un module local" };
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -266,11 +266,12 @@ function renderOverview() {
 }
 
 async function selectGuild(id) {
-  app.selected = id; app.details = null; app.history = []; app.plan = null;
+  app.selected = id; app.details = null; app.history = []; app.plan = null; app.moduleData = null;
   localStorage.setItem("pilotGuild", id);
   $("planPanel").hidden = true;
   renderGuilds(); renderOverview();
   await Promise.all([loadDetails(), loadHistory()]);
+  await loadModules();
 }
 
 async function loadDetails() {
@@ -328,6 +329,7 @@ function renderHistory() {
 
 function stateName(s) { return ({draft: "Brouillon", queued: "En attente", running: "En cours", completed: "Terminé", partial: "Partiellement terminé", failed: "Échec", done: "Réussi", skipped: "Déjà présent", authorization_required: "Autorisation Discord requise"})[s] || s; }
 function actionDescription(a) {
+  if (a.type === "set_module") return `${a.enabled === "true" ? "Activer" : "Désactiver"} le module ${a.module}`;
   let text = `${actionNames[a.type] || a.type} · ${a.type === "suggest_integration" ? app.catalog.providers[a.provider]?.name || a.provider : a.channel || a.name || ""}`;
   if (a.category) text += ` → ${a.category}`;
   if (a.new_name) text += ` → ${a.new_name}`;
@@ -383,7 +385,10 @@ async function bootstrap(quiet = false) {
     if (data.error && !quiet) toast(data.error, true);
     if (!app.selected && guilds().length) app.selected = guilds()[0].id;
     renderGuilds(); renderOverview();
-    if (wasOnline !== data.online || (!quiet && app.selected)) await Promise.all([loadDetails(), loadHistory()]);
+    if (wasOnline !== data.online || (!quiet && app.selected)) {
+      await Promise.all([loadDetails(), loadHistory()]);
+      if (app.tab === "modules") await loadModules();
+    }
     return true;
   } catch (e) {
     $("connectionBadge").className = "connection-badge";
@@ -407,7 +412,81 @@ async function models() {
 function switchTab(key) {
   app.tab = key;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === key));
-  ["studio", "catalog", "structure", "history"].forEach(k => $(`${k}Tab`).hidden = k !== key);
+  ["studio", "modules", "catalog", "structure", "history"].forEach(k => $(`${k}Tab`).hidden = k !== key);
+  if (key === "modules" && app.selected && !app.moduleData) loadModules();
+}
+
+async function loadModules() {
+  const id = app.selected;
+  if (!id) { app.moduleData = null; renderModules(); return; }
+  try {
+    const data = await request(`/api/modules/${id}`);
+    if (app.selected === id) app.moduleData = data;
+  } catch (e) { if (app.selected === id) app.moduleData = null; toast(e.message, true); }
+  renderModules();
+}
+
+function renderModules() {
+  const data = app.moduleData;
+  const grid = $("moduleGrid");
+  if (!data) {
+    $("moduleStatus").textContent = "Sélectionne un serveur pour charger les modules.";
+    replace(grid, []); replace($("moduleLeaderboard"), []); return;
+  }
+  const enabled = Object.values(data.settings).filter(row => row.enabled).length;
+  const unavailable = [];
+  if (!data.members_intent) unavailable.push("Server Members Intent (rôle automatique, accueil/invitations)");
+  if (!data.content_intent) unavailable.push("Message Content Intent (anti-liens, mots filtrés)");
+  $("moduleStatus").textContent = `${enabled} module(s) configuré(s) sur ce serveur. ${data.online ? "Bot connecté." : "Bot déconnecté : configuration impossible pour l'instant."} ${unavailable.length ? "Intents non disponibles : " + unavailable.join(" ; ") + ". Active-les dans Discord Developer Portal > Bot si besoin." : "Les intents requis sont connectés."} Les permissions Discord sont vérifiées lors des événements réels.`;
+  replace(grid, data.modules.map(spec => {
+    const current = data.settings[spec.id] || {};
+    const article = dom("article", "module-card");
+    const title = dom("div", "module-heading");
+    title.append(dom("span", "module-symbol", spec.icon), dom("strong", "", spec.title));
+    title.append(dom("span", `module-badge${current.enabled ? " on" : ""}`, current.enabled ? "CONFIGURÉ" : "INACTIF"));
+    article.append(title, dom("p", "module-description", spec.description));
+    const inputs = {};
+    for (const [name, kind, labelText] of spec.fields) {
+      const label = dom("label", "module-label", labelText);
+      let input;
+      if (["role", "text", "optional_text", "voice"].includes(kind)) {
+        input = dom("select", "module-input");
+        const empty = dom("option", "", kind === "optional_text" ? "Aucun salon" : "Choisir…"); empty.value = "";
+        input.append(empty);
+        const rows = kind === "role" ? (app.details?.roles || []) : (app.details?.channels || []).filter(c => c.type === (kind === "voice" ? "voice" : "text"));
+        for (const item of rows) { const option = dom("option", "", item.name); option.value = item.id; input.append(option); }
+      } else {
+        input = dom("input", "module-input");
+        input.type = "text";
+        input.placeholder = ({words: "mot, expression, autre mot", hour: "08:30", snowflake: "123456789012345678", emoji: "✅", message: "Ton annonce…"})[kind] || "";
+        input.maxLength = kind === "message" ? 1800 : kind === "words" ? 1400 : 100;
+      }
+      input.value = current[name] || ""; inputs[name] = input;
+      label.append(input); article.append(label);
+    }
+    const footer = dom("div", "module-actions");
+    const toggle = dom("label", "module-toggle"); const checkbox = dom("input");
+    checkbox.type = "checkbox"; checkbox.checked = Boolean(current.enabled);
+    toggle.append(checkbox, dom("span", "", "Activer"));
+    const save = dom("button", "primary-button", "Enregistrer"); save.disabled = !data.online;
+    save.onclick = async () => {
+      save.disabled = true;
+      try {
+        const payload = {enabled: checkbox.checked};
+        Object.entries(inputs).forEach(([key, input]) => payload[key] = input.value.trim());
+        const result = await request(`/api/modules/${data.guild_id}/${spec.id}`, {data: payload});
+        toast(result.warning || `${spec.title} : configuration enregistrée.`);
+        await loadModules(); await bootstrap(true);
+      } catch (e) { toast(e.message, true); save.disabled = false; }
+    };
+    footer.append(toggle, save); article.append(footer); return article;
+  }));
+  const ranking = data.leaderboard || [];
+  replace($("moduleLeaderboard"), ranking.length ? ranking.map((row, index) => {
+    const r = dom("div", "module-rank");
+    r.append(dom("span", "", `#${index + 1}`), dom("strong", "", `Membre ${row.member_id}`),
+             dom("span", "", `Niveau ${row.level} · ${row.xp} XP`)); return r;
+  }) : [dom("p", "empty", "Aucun XP enregistré : active le module et attends des messages réels.")]);
 }
 
 async function loadCatalog() {
@@ -440,7 +519,13 @@ function renderCatalog() {
     const header = dom("div", "catalog-card-head");
     header.append(dom("span", "catalog-icon", f.icon), dom("span", "catalog-number", `#${String(f.number).padStart(2, "0")}`));
     card.append(header, dom("strong", "", f.title), dom("small", "catalog-category", f.category));
-    if (provider) {
+    if (f.availability === "native") {
+      card.append(dom("p", "catalog-provider", "✓ Module natif à configurer dans Discord Pilot"));
+      const configure = dom("button", "primary-button", "Configurer le module");
+      configure.onclick = () => { switchTab("modules"); loadModules(); };
+      card.append(configure);
+      if (provider) card.append(dom("small", "catalog-category", `Alternative externe : ${provider.name}`));
+    } else if (provider) {
       card.append(dom("p", "catalog-provider", `Bot conseillé : ${provider.name}`));
       const actions = dom("div", "catalog-actions");
       const prepare = dom("button", "primary-button", "Préparer l'ajout");
@@ -749,6 +834,7 @@ async function init() {
   $("catalogSearch").oninput = renderCatalog;
   $("catalogCategory").onchange = renderCatalog;
   $("catalogExternalOnly").onchange = renderCatalog;
+  $("refreshModules").onclick = async () => { await loadDetails(); await loadModules(); };
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => switchTab(t.dataset.tab));
   document.querySelectorAll("[data-example]").forEach(t => t.onclick = () => { $("requestText").value = t.dataset.example; switchTab("studio"); $("requestText").focus(); });
   await bootstrap(); renderPresets(); await loadCatalog(); await models();
