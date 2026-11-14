@@ -27,12 +27,26 @@ jobs:
           Expand-Archive -LiteralPath 'sources.zip' -DestinationPath 'buildsrc'
           if (-not (Test-Path 'buildsrc/discord-pilot/windows_entrypoint.py')) { throw 'Entrée Windows introuvable' }
 
-      - name: Appliquer les correctifs 0.4.2
+      - name: Conserver les correctifs existants de la version 0.4.2
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.2/DiscordPilot_Source.zip' -OutFile 'sources-042.zip'
+          Expand-Archive -LiteralPath 'sources-042.zip' -DestinationPath 'patchsrc'
+          $overlays = @('app.py', 'planner.py', 'discord_ops.py', 'storage.py', 'updater.py', 'updater_cli.py', 'version.json', 'requirements.txt', 'README.md', 'web/index.html', 'web/app.js', 'web/style.css', 'web/updates.css', 'demarrer.ps1', 'DEMARRER_DISCORD_PILOT.cmd', 'LANCER_DISCORD_PILOT.bat', 'CONSTRUIRE_EXE_WINDOWS.bat')
+          foreach ($relative in $overlays) {
+            $source = Join-Path 'patchsrc/discord-pilot' $relative
+            $destination = Join-Path 'buildsrc/discord-pilot' $relative
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
+          }
+
+      - name: Appliquer les correctifs 0.4.3
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
+          Copy-Item 'discord-pilot/planner.py' 'buildsrc/discord-pilot/planner.py' -Force
           Copy-Item 'discord-pilot/web/app.js' 'buildsrc/discord-pilot/web/app.js' -Force
           Copy-Item 'discord-pilot/tests/test_api.py' 'buildsrc/discord-pilot/tests/test_api.py' -Force
+          Copy-Item 'discord-pilot/tests/test_natural_language.py' 'buildsrc/discord-pilot/tests/test_natural_language.py' -Force
           Copy-Item 'discord-pilot/version.json' 'buildsrc/discord-pilot/version.json' -Force
 
       - name: Installer les dépendances et exécuter les tests
@@ -61,7 +75,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.2' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.3' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -92,7 +106,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.4.2' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.4.3' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -105,11 +119,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.4.2
+          name: DiscordPilot_EXE_Windows_v0.4.3
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
 
-      - name: Publier la version 0.4.2 après les tests Windows
+      - name: Publier la version 0.4.3 après les tests Windows
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,5 +139,31 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Corrige le refus des tokens basé uniquement sur leur longueur. La vérification est désormais réalisée par Discord, et le studio affiche la réponse avant de fermer la fenêtre. Test Windows : démarrage normal et port occupé. Le raccordement à un vrai bot exige le token personnel de son propriétaire.'
-          gh release upload v0.4.2 $exe $archive --clobber
+          $notes = 'Meilleure compréhension des instructions Discord en français sans installer d autre logiciel : rajoute un channel annonces, crée un salon nommé support, etc. Si le nom manque, Discord Pilot demande une précision. Les modifications sont toujours validées avant application. Tests locaux et Windows exécutés.'
+          $tag = 'v0.4.3'
+          gh release view $tag --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $exe $archive --clobber
+          } else {
+            gh release create $tag $exe $archive --title 'Discord Pilot 0.4.3' --notes $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'La publication de la release a échoué.' }
+
+          $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $archiveSha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            version = '0.4.3'
+            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.3/DiscordPilot_Source.zip'
+            sha256 = $archiveSha
+            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.4.3/DiscordPilot.exe'
+            exe_sha256 = $exeSha
+          }
+          $json = ConvertTo-Json -InputObject $manifest -Depth 3
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'update.json'), $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add update.json
+          git commit -m 'chore: publier le manifeste 0.4.3'
+          if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être enregistré.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être publié.' }

@@ -22,7 +22,8 @@ import discord
 
 from discord_ops import execute_action
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
-                     local_parse, parse_ollama_response, validate_actions)
+                     local_parse, missing_information, norm, parse_ollama_decision,
+                     validate_actions)
 from storage import State, load_token, remove_token, save_token
 from updater import (MAX_EXE_SIZE, MAX_ZIP_SIZE, RESTART_UPDATE_CODE, inspect_manifest,
                      inspect_zip, pending_update, read_remote, read_version,
@@ -404,7 +405,7 @@ async def api_update_apply(request):
     return web.json_response({"ok": True, "restarting": True})
 
 
-async def ollama_plan(prompt: str, model: str) -> list[dict]:
+async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
     timeout = aiohttp.ClientTimeout(total=120)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post("http://127.0.0.1:11434/api/chat", json={
@@ -418,7 +419,7 @@ async def ollama_plan(prompt: str, model: str) -> list[dict]:
             if response.status >= 400:
                 raise ValueError(f"Ollama ne peut pas utiliser le modèle « {model} » (HTTP {response.status}).")
             data = await response.json()
-    return parse_ollama_response(data["message"]["content"])
+    return parse_ollama_decision(data["message"]["content"])
 
 
 async def api_plan(request):
@@ -430,6 +431,9 @@ async def api_plan(request):
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
         raise ValueError("Mode d'interprétation inconnu.")
+    question = missing_information(prompt)
+    if question:
+        return web.json_response({"needs_clarification": True, "question": question, "original_prompt": prompt.strip()})
     models = await ollama_models() if mode != "local" else []
     if mode == "ollama" and not models:
         raise ValueError("Ollama n'est pas démarré ou aucun modèle n'est installé.")
@@ -438,15 +442,19 @@ async def api_plan(request):
         if chosen not in models:
             raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
         try:
-            actions = await ollama_plan(prompt, chosen)
+            actions, question = await ollama_plan(prompt, chosen)
             used = f"ollama:{chosen}"
         except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
     else:
         actions = local_parse(prompt)
         used = "local"
+    if question:
+        return web.json_response({"needs_clarification": True, "question": question, "original_prompt": prompt.strip()})
     if not actions:
-        raise ValueError("Demande trop complexe pour le mode disponible. Utilise les exemples ou démarre Ollama pour les demandes libres.")
+        raise ValueError("Cette demande n'est pas comprise. Essaie « Rajoute un channel annonces », « Crée un rôle Membre » ou donne des noms plus précis.")
+    if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
+        raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used)
     return web.json_response({"plan": plan})
 
