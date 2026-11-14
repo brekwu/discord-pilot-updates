@@ -40,8 +40,10 @@ STATE = State()
 CSRF = secrets.token_urlsafe(32)
 ID_RE = re.compile(r"^\d{17,20}$")
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/brekwu/discord-pilot-updates/main/update.json"
-VOICE_MODEL_NAME = "base"
-MAX_VOICE_BYTES = 8 * 1024 * 1024  # 16 kHz mono WAV: about two minutes.
+VOICE_MODEL_NAME = "small"  # Multilingual (~500 MB), substantially more capable than Vosk / Whisper base.
+MAX_VOICE_BYTES = 25 * 1024 * 1024
+MAX_VOICE_SECONDS = 300
+VOICE_MIME_TYPES = {"audio/wav", "audio/webm", "audio/ogg", "audio/mp4"}
 
 
 def update_url() -> str:
@@ -199,41 +201,61 @@ def load_voice_model(data_root: str):
         raise ValueError("Modèle vocal indisponible. Vérifie Internet lors du premier usage puis réessaie.") from exc
 
 
-def transcribe_french_wav(payload: bytes, data_root: Path) -> str:
+def decode_voice_audio(payload: bytes, mime_type: str):
+    """Decode either browser-native MediaRecorder audio or legacy PCM WAV in memory."""
+    import numpy as np
     if not payload or len(payload) > MAX_VOICE_BYTES:
-        raise ValueError("Enregistrement vocal vide ou trop long (maximum 2 minutes).")
+        raise ValueError("Enregistrement vocal vide ou trop volumineux.")
+    if mime_type not in VOICE_MIME_TYPES:
+        raise ValueError("Format de dictée non pris en charge (WebM, Ogg, MP4 ou WAV).")
     try:
-        with wave.open(BytesIO(payload), "rb") as wav:
-            if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != 16000:
-                raise ValueError("Audio non compatible : WAV mono, 16 kHz, 16 bits requis.")
-            if wav.getnframes() < 8000 or wav.getnframes() > 16000 * 120:
-                raise ValueError("Dicte entre 0,5 et 120 secondes.")
-            import numpy as np
-            frames = wav.readframes(wav.getnframes())
-            samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
-            if np.max(np.abs(samples)) < 0.0008:
-                raise ValueError("Le microphone n'a presque capté aucun son. Vérifie l'entrée audio sélectionnée dans Opera et Windows.")
-            model = load_voice_model(str(data_root))
-            segments, _ = model.transcribe(samples, beam_size=5, language="fr",
-                                            vad_filter=False, condition_on_previous_text=False)
-            return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
-    except (wave.Error, EOFError) as exc:
-        raise ValueError("Enregistrement audio illisible.") from exc
+        if mime_type == "audio/wav":
+            with wave.open(BytesIO(payload), "rb") as wav:
+                if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != 16000:
+                    raise ValueError("Audio non compatible : WAV mono, 16 kHz, 16 bits requis.")
+                if wav.getnframes() > 16000 * MAX_VOICE_SECONDS:
+                    raise ValueError("Enregistrement limité à 5 minutes.")
+                samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2").astype(np.float32) / 32768.0
+        else:
+            from faster_whisper.audio import decode_audio
+            samples = decode_audio(BytesIO(payload), sampling_rate=16000)
+    except (wave.Error, EOFError, OSError) as exc:
+        raise ValueError("Enregistrement audio illisible ou incomplet.") from exc
+    except Exception as exc:
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError("Le navigateur a envoyé un enregistrement audio incomplet ou illisible.") from exc
+    seconds = len(samples) / 16000
+    if seconds < 0.5 or seconds > MAX_VOICE_SECONDS:
+        raise ValueError("La dictée doit durer de 0,5 seconde à 5 minutes.")
+    if np.max(np.abs(samples)) < 0.0008:
+        raise ValueError("Le microphone n'a presque capté aucun son. Vérifie l'entrée audio sélectionnée dans Opera et Windows.")
+    return samples
+
+
+def transcribe_voice_audio(payload: bytes, data_root: Path, mime_type: str) -> dict:
+    samples = decode_voice_audio(payload, mime_type)
+    model = load_voice_model(str(data_root))
+    segments, _ = model.transcribe(samples, beam_size=5, language="fr",
+                                    vad_filter=False, condition_on_previous_text=False)
+    texts = [segment.text.strip() for segment in segments if segment.text.strip()]
+    return {"text": " ".join(texts), "seconds": round(len(samples) / 16000, 1),
+            "segments": len(texts), "engine": "whisper-small"}
 
 
 async def api_transcribe(request):
-    if request.content_type != "audio/wav":
-        raise ValueError("Envoie un enregistrement WAV pour la transcription.")
+    if request.content_type not in VOICE_MIME_TYPES:
+        raise ValueError("Envoie un enregistrement WebM, Ogg, MP4 ou WAV pour la transcription.")
     payload = await request.content.read(MAX_VOICE_BYTES + 1)
     if len(payload) > MAX_VOICE_BYTES:
         raise ValueError("Enregistrement trop volumineux.")
     try:
-        result = await asyncio.to_thread(transcribe_french_wav, payload, STATE.root)
+        result = await asyncio.to_thread(transcribe_voice_audio, payload, STATE.root, request.content_type)
     except ValueError:
         raise
     except Exception as exc:
         raise ValueError(f"La transcription locale a échoué ({type(exc).__name__}).") from exc
-    return web.json_response({"text": result, "language": "fr-FR", "local": True})
+    return web.json_response({**result, "language": "fr-FR", "local": True})
 
 
 async def api_health(request):
@@ -539,8 +561,8 @@ async def api_plan(request):
     data = await body_json(request)
     guild_id = require_id(data.get("guild_id"))
     raw_prompt = data.get("prompt", "")
-    if not isinstance(raw_prompt, str) or not 3 <= len(raw_prompt.strip()) <= 4000:
-        raise ValueError("Décris ta demande (3 à 4 000 caractères).")
+    if not isinstance(raw_prompt, str) or not 3 <= len(raw_prompt.strip()) <= 8000:
+        raise ValueError("Décris ta demande (3 à 8 000 caractères).")
     prompt = collapse_old_clarifications(raw_prompt)
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
