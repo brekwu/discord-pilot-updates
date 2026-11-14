@@ -8,6 +8,7 @@ import unicodedata
 from typing import Any
 
 from integration_catalog import PROVIDERS
+from community_modules import MODULES
 
 
 ACTION_TYPES = {
@@ -16,6 +17,7 @@ ACTION_TYPES = {
     "send_message", "make_private", "delete_channel", "delete_role",
     "configure_welcome", "configure_farewell", "configure_invites",
     "suggest_integration",
+    "set_module",
 }
 
 ACTION_LABELS = {
@@ -34,6 +36,7 @@ ACTION_LABELS = {
     "configure_farewell": "Activer les messages de départ",
     "configure_invites": "Activer le suivi des invitations",
     "suggest_integration": "Préparer l'autorisation du bot externe",
+    "set_module": "Activer ou désactiver un module local",
 }
 
 DANGEROUS_ACTIONS = {"delete_channel", "delete_role"}
@@ -54,6 +57,7 @@ FIELDS = {
     "configure_farewell": ("channel",),
     "configure_invites": ("channel",),
     "suggest_integration": ("provider",),
+    "set_module": ("module", "enabled"),
 }
 
 OPTIONAL = {
@@ -159,6 +163,9 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
                 fields[key] = compact(item[key])
         if kind == "suggest_integration" and fields["provider"] not in PROVIDERS:
             raise ValueError("Application externe non référencée dans le catalogue officiel de Discord Pilot.")
+        if kind == "set_module" and (fields["module"] not in {"xp", "antispam", "antilinks"}
+                                     or fields["enabled"] not in {"true", "false"}):
+            raise ValueError("Ce module ne peut pas être piloté sans paramètres. Ouvre l'onglet Modules actifs.")
         if kind == "send_message" and len(fields["content"]) > 1800:
             raise ValueError("Le message dépasse la limite de 1 800 caractères.")
         if kind != "send_message" and any(len(v) > 900 for v in fields.values()):
@@ -545,6 +552,8 @@ def local_parse(prompt: str) -> list[dict[str, str]]:
 
 def description(item: dict[str, str]) -> str:
     label = ACTION_LABELS[item["type"]]
+    if item["type"] == "set_module":
+        return f"{'Activer' if item['enabled'] == 'true' else 'Désactiver'} {MODULES[item['module']]['title']}"
     if item["type"] == "suggest_integration":
         return f"{label} : {PROVIDERS[item['provider']]['name']} (validation Discord obligatoire)"
     if item["type"].startswith("configure_"):
