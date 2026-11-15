@@ -32,7 +32,7 @@ from community_modules import (MODULES, SpamTracker, normalize_module,
 from community_support import parse_dm_target, parse_staff_reply, staff_allowed, validate_application
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from planner import (DANGEROUS_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
-                     collapse_old_clarifications, community_automation_plan,
+                     channel_role_configuration_request, collapse_old_clarifications, community_automation_plan,
                      default_creation_plan, local_parse,
                      norm, parse_ollama_decision,
                      validate_actions)
@@ -1155,6 +1155,81 @@ async def api_history(request):
     return web.json_response({"plans": STATE.history(guild_id)})
 
 
+def recently_created_channels(guild_id, guild):
+    """Only channels with a confirmed create result in the latest matching plan."""
+    for plan in STATE.history(guild_id):
+        if plan.get("status") not in {"completed", "partial"}:
+            continue
+        results = {row.get("index"): row for row in plan.get("results", [])}
+        channels = []
+        for index, action in enumerate(plan.get("actions", [])):
+            if action.get("type") not in {"create_text_channel", "create_voice_channel"}:
+                continue
+            result = results.get(index, {})
+            if result.get("status") != "done":
+                continue
+            match = re.search(r"\bID (\d{17,20})\b", result.get("detail", ""))
+            if match is None:
+                continue
+            channel = guild.get_channel(int(match.group(1)))
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                channels.append({"id": str(channel.id), "name": channel.name,
+                                 "type": "voice" if isinstance(channel, discord.VoiceChannel) else "text"})
+        if channels:
+            return channels[:20]
+    return []
+
+
+async def api_permissions_context(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if guild is None:
+        raise ValueError("Connecte le bot à ce serveur pour choisir les rôles et salons existants.")
+    channels = [{"id": str(channel.id), "name": channel.name,
+                 "type": "voice" if isinstance(channel, discord.VoiceChannel) else "text"}
+                for channel in guild.channels
+                if isinstance(channel, (discord.TextChannel, discord.VoiceChannel))]
+    roles = [{"id": str(role.id), "name": role.name}
+             for role in guild.roles if not role.managed]
+    return web.json_response({"channels": channels, "roles": roles,
+                              "recent_channels": recently_created_channels(guild_id, guild)})
+
+
+async def api_permissions_draft(request):
+    guild_id = require_id(request.match_info["guild_id"])
+    guild = MANAGER.get_guild(guild_id)
+    if guild is None:
+        raise ValueError("Connecte le bot au serveur avant de préparer les permissions.")
+    data = await body_json(request)
+    if set(data) != {"channels", "role_id", "view", "participate"}:
+        raise ValueError("Choisis les salons, un rôle et les deux options de permissions.")
+    ids = data["channels"]
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 20 or len(set(map(str, ids))) != len(ids):
+        raise ValueError("Sélectionne entre 1 et 20 salons différents.")
+    role_id = data["role_id"]
+    if not isinstance(role_id, str) or not ID_RE.fullmatch(role_id):
+        raise ValueError("Sélectionne un rôle existant.")
+    role = guild.get_role(int(role_id))
+    if role is None or role.managed:
+        raise ValueError("Rôle introuvable ou géré par une autre intégration.")
+    for value in (data["view"], data["participate"]):
+        if not isinstance(value, str) or value not in {"allow", "deny", "inherit", "keep"}:
+            raise ValueError("Choisis des permissions autorisées.")
+    if data["view"] == data["participate"] == "keep":
+        raise ValueError("Choisis au moins une permission à modifier.")
+    for channel_id in ids:
+        if not isinstance(channel_id, str) or not ID_RE.fullmatch(channel_id):
+            raise ValueError("Identifiant de salon invalide.")
+        channel = guild.get_channel(int(channel_id))
+        if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+            raise ValueError("Un des salons n'existe plus sur ce serveur.")
+    actions = validate_actions([{"type": "set_channel_role_access", "channel_id": channel_id,
+                                 "role_id": role_id, "view": data["view"],
+                                 "participate": data["participate"]} for channel_id in ids])
+    plan = STATE.add(guild_id, f"Permissions des salons pour {role.name}", actions, "permissions-guidées")
+    return web.json_response({"plan": plan})
+
+
 async def api_modules(request):
     guild_id = require_id(request.match_info["guild_id"])
     guild = MANAGER.get_guild(guild_id)
@@ -1553,6 +1628,10 @@ async def api_plan(request):
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
         raise ValueError("Mode d'interprétation inconnu.")
+    if channel_role_configuration_request(prompt):
+        return web.json_response({"configuration_required": "channel_role_access",
+                                  "message": "Choisis les salons, le rôle et les accès à autoriser/refuser. "
+                                             "Aucune permission n'est modifiée sans validation."})
     # An explicit, understood command must go straight to a draft. Never let
     # an optional model turn it into a repeated clarification dialog.
     external = recommended_providers(prompt)
@@ -1577,6 +1656,9 @@ async def api_plan(request):
                 raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
     if not actions:
         raise ValueError("Je ne peux pas proposer d'action sûre pour cette demande. Décris les changements souhaités en une phrase (par exemple « Crée deux salons bienvenue et au-revoir »).")
+    if any(action["type"] == "set_channel_role_access" for action in actions):
+        raise ValueError("Les permissions des salons se configurent dans « Gérer les rôles et accès des salons » : "
+                         "les salons, le rôle et les droits doivent être choisis explicitement.")
     if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used)
@@ -1703,6 +1785,8 @@ def build_app():
     app.router.add_get("/api/guild/{guild_id}", api_guild)
     app.router.add_post("/api/alias", api_alias)
     app.router.add_get("/api/history/{guild_id}", api_history)
+    app.router.add_get("/api/permissions/{guild_id}", api_permissions_context)
+    app.router.add_post("/api/permissions/{guild_id}/draft", api_permissions_draft)
     app.router.add_get("/api/modules/{guild_id}", api_modules)
     app.router.add_post("/api/modules/{guild_id}/{module}", api_module_update)
     app.router.add_post("/api/community/{guild_id}/warn", api_warning_create)
