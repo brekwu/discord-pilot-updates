@@ -1590,15 +1590,19 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
                 actions, question = parse_ollama_decision(answer)
                 if actions:
                     return actions, None
+                if question:
+                    # A missing detail is not a model failure. Ask for that
+                    # detail in the UI, without generating a fabricated plan.
+                    return [], question
                 problem = ("Le modèle a demandé une précision au lieu de proposer un plan."
                            if question else "Le modèle a répondu sans proposer d'action exécutable.")
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 problem = str(exc)
             if attempt == 1:
-                raise ValueError("Impossible de créer un plan vérifiable avec ce modèle IA : "
-                                 f"{problem} Essaie une demande précise comme « Crée un salon annonces ». "
-                                 "Pour les récompenses, tickets et autres modules avancés, "
-                                 "utilise l'onglet Modules actifs. Aucune modification n'a été effectuée.")
+                # A response outside the strict action schema is never
+                # executed. Guide the user to an editable instruction rather
+                # than presenting a dead-end model-format error.
+                return [], None
             # One internal formatting repair, no clarification loop shown to
             # the user. The exact allowlist remains enforced by the parser.
             messages.extend([
@@ -1616,6 +1620,26 @@ async def ollama_plan(prompt: str, model: str) -> tuple[list[dict], str | None]:
                  "Si tu ne peux pas la réaliser, renvoie {\"actions\":[]}."},
             ])
     return [], None
+
+
+def plan_clarification(prompt: str, model_question: str | None = None) -> dict:
+    """A safe, editable next step when no supported action was produced."""
+    requested = norm(prompt)
+    if re.search(r"\b(?:salons?|channels?|canaux?|vocaux?|roles?|permissions?|acces)\b", requested):
+        examples = ["Crée un salon annonces", "Crée un rôle Membre",
+                    "Configure les permissions des salons"]
+        question = "Quel salon ou rôle veux-tu modifier, et quel changement précis faut-il faire ?"
+    elif re.search(r"\b(?:tickets?|recompenses?|candidatures?|sondages?|moderation|xp)\b", requested):
+        examples = ["Active le module XP", "Crée un salon tickets",
+                    "Configure les permissions des salons"]
+        question = "Souhaites-tu créer des salons, activer un module ou régler ses options dans « Modules actifs » ?"
+    else:
+        examples = ["Crée un salon annonces", "Crée un rôle Membre",
+                    "Active les statistiques des messages"]
+        question = "Quel changement concret veux-tu apporter au serveur ?"
+    return {"needs_clarification": True, "question": model_question or question,
+            "examples": examples,
+            "message": "Aucun plan exécutable sûr n'a été généré. Aucune modification n'a été effectuée."}
 
 
 async def api_plan(request):
@@ -1641,6 +1665,7 @@ async def api_plan(request):
                    if external else [])
                or local_parse(prompt) or default_creation_plan(prompt))
     used = "local"
+    model_question = None
     if not actions and mode != "local":
         models = await ollama_models()
         if mode == "ollama" and not models:
@@ -1650,12 +1675,12 @@ async def api_plan(request):
             if chosen not in models:
                 raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
             try:
-                actions, _question = await ollama_plan(prompt, chosen)
+                actions, model_question = await ollama_plan(prompt, chosen)
                 used = f"ollama:{chosen}"
             except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
                 raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
     if not actions:
-        raise ValueError("Je ne peux pas proposer d'action sûre pour cette demande. Décris les changements souhaités en une phrase (par exemple « Crée deux salons bienvenue et au-revoir »).")
+        return web.json_response(plan_clarification(prompt, model_question))
     if any(action["type"] == "set_channel_role_access" for action in actions):
         raise ValueError("Les permissions des salons se configurent dans « Gérer les rôles et accès des salons » : "
                          "les salons, le rôle et les droits doivent être choisis explicitement.")
