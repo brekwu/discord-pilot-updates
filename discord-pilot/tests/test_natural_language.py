@@ -19,8 +19,12 @@ class LocalLanguageTests(unittest.TestCase):
     def test_ambiguous_role_access_request_requires_explicit_choices(self):
         self.assertTrue(channel_role_configuration_request("Gère les rôles des salons que tu viens de créer"))
         self.assertTrue(channel_role_configuration_request("Configure les permissions des salons"))
+        self.assertTrue(channel_role_configuration_request("Configure les accès aux salons pour les membres"))
+        self.assertTrue(channel_role_configuration_request("Organise les droits des salons que tu as créés"))
+        self.assertTrue(channel_role_configuration_request("Mets les permissions des salons pour les rôles"))
         self.assertFalse(channel_role_configuration_request("Crée un salon annonces et ajoute des rôles"))
         self.assertFalse(channel_role_configuration_request("Gère les rôles des salons puis supprime général"))
+        self.assertFalse(channel_role_configuration_request("Crée des salons puis configure les permissions des rôles"))
         with self.assertRaises(ValueError):
             validate_actions([{"type": "set_channel_role_access", "channel_id": "223456789012345678",
                                "role_id": "123456789012345678", "view": "keep", "participate": "keep"}])
@@ -223,13 +227,16 @@ class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
 
         invalid = FakeSession([first, first])
         with patch.object(app.aiohttp, "ClientSession", return_value=invalid):
-            with self.assertRaisesRegex(ValueError, "plan vérifiable"):
-                await app.ollama_plan("Crée un salon textuel bienvenue", "qwen-test")
+            self.assertEqual(await app.ollama_plan("Crée un salon textuel bienvenue", "qwen-test"), ([], None))
 
         empty = FakeSession(['{"actions":[]}', '{"actions":[]}'])
         with patch.object(app.aiohttp, "ClientSession", return_value=empty):
-            with self.assertRaisesRegex(ValueError, "Modules actifs"):
-                await app.ollama_plan("Configure les récompenses avec des détails manquants", "qwen-test")
+            self.assertEqual(await app.ollama_plan("Configure les récompenses avec des détails manquants", "qwen-test"), ([], None))
+
+        question = FakeSession(['{"actions":[],"question":"Quel rôle ?"}'])
+        with patch.object(app.aiohttp, "ClientSession", return_value=question):
+            self.assertEqual(await app.ollama_plan("Organise les rôles", "qwen-test"), ([], "Quel rôle ?"))
+        self.assertEqual(len(question.calls), 1)
 
 
 class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
@@ -274,14 +281,32 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(body["plan"]["prompt"], "cree un salon bienvenu et au revoir")
 
-    async def test_ai_questions_cannot_loop_back_into_clarification_modals(self):
+    async def test_ai_missing_details_get_an_editable_response_without_creating_plan(self):
         prompt = {"guild_id": "1567347687379050727", "mode": "ollama",
                   "prompt": "Réorganise les conversations à ta convenance"}
         with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
              patch.object(app, "ollama_plan", new=AsyncMock(return_value=([], "Quel salon ?"))):
             res = await self.client.post("/api/plan", json=prompt, headers=self.headers)
-        self.assertEqual(res.status, 400)
-        self.assertNotIn("needs_clarification", await res.text())
+        self.assertEqual(res.status, 200)
+        body = await res.json()
+        self.assertTrue(body["needs_clarification"])
+        self.assertEqual(body["question"], "Quel salon ?")
+        self.assertEqual(len(body["examples"]), 3)
+        self.assertEqual(app.STATE.history(prompt["guild_id"]), [])
+
+    async def test_empty_model_and_local_unsupported_request_never_create_draft(self):
+        original = {"guild_id": "1567347687379050727", "mode": "ollama",
+                    "prompt": "Arrange le serveur à ta convenance"}
+        with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
+             patch.object(app, "ollama_plan", new=AsyncMock(return_value=([], None))):
+            res = await self.client.post("/api/plan", json=original, headers=self.headers)
+        self.assertEqual(res.status, 200)
+        self.assertTrue((await res.json())["needs_clarification"])
+        original["mode"] = "local"
+        local_res = await self.client.post("/api/plan", json=original, headers=self.headers)
+        self.assertEqual(local_res.status, 200)
+        self.assertTrue((await local_res.json())["needs_clarification"])
+        self.assertEqual(app.STATE.history(original["guild_id"]), [])
 
     async def test_local_explicit_request_creates_draft(self):
         res = await self.client.post("/api/plan", json={"guild_id": "1567347687379050727",
