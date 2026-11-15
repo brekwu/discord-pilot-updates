@@ -209,8 +209,12 @@ function modal({title, description, fields = [], confirmText = "Confirmer", onCo
       const wrapper = dom("label", "checkbox-row"); const inp = dom("input"); inp.type = "checkbox"; inp.checked = f.checked !== false;
       inputs[f.id] = inp; wrapper.append(inp, dom("span", "", f.label)); nodes.push(wrapper); return;
     }
-    const label = dom("label", "modal-label", f.label); const inp = dom("input", "modal-input"); inp.id = `modal-${f.id}`;
-    inp.type = f.type || "text"; inp.placeholder = f.placeholder || ""; inp.value = f.value || ""; inp.autocomplete = f.autocomplete || "off";
+    const label = dom("label", "modal-label", f.label);
+    const inp = dom(f.type === "select" ? "select" : "input", "modal-input"); inp.id = `modal-${f.id}`;
+    if (f.type === "select") {
+      for (const option of f.options || []) { const child = dom("option", "", option.label); child.value = option.value; inp.append(child); }
+    } else { inp.type = f.type || "text"; inp.placeholder = f.placeholder || ""; inp.autocomplete = f.autocomplete || "off"; }
+    inp.value = f.value || "";
     inputs[f.id] = inp; label.htmlFor = inp.id; nodes.push(label, inp);
   });
   replace($("modalBody"), nodes);
@@ -330,6 +334,12 @@ function renderHistory() {
 function stateName(s) { return ({draft: "Brouillon", queued: "En attente", running: "En cours", completed: "Terminé", partial: "Partiellement terminé", failed: "Échec", done: "Réussi", skipped: "Déjà présent", authorization_required: "Autorisation Discord requise"})[s] || s; }
 function actionDescription(a) {
   if (a.type === "set_module") return `${a.enabled === "true" ? "Activer" : "Désactiver"} le module ${a.module}`;
+  if (a.type === "set_channel_role_access") {
+    const channel = app.details?.channels.find(c => c.id === a.channel_id)?.name || a.channel_id;
+    const role = app.details?.roles.find(r => r.id === a.role_id)?.name || (a.role_id === app.selected ? "@everyone" : a.role_id);
+    const terms = {keep: "inchangé", allow: "autorisé", deny: "refusé", inherit: "hérité"};
+    return `Permissions de #${channel} pour ${role} · visibilité : ${terms[a.view]} · écrire/rejoindre : ${terms[a.participate]}`;
+  }
   let text = `${actionNames[a.type] || a.type} · ${a.type === "suggest_integration" ? app.catalog.providers[a.provider]?.name || a.provider : a.channel || a.name || ""}`;
   if (a.category) text += ` → ${a.category}`;
   if (a.new_name) text += ` → ${a.new_name}`;
@@ -734,6 +744,11 @@ async function createPlan() {
   app.busy = true; $("generateButton").textContent = "Analyse de la demande…"; renderOverview();
   try {
     const data = await request("/api/plan", {data: {guild_id: app.selected, prompt, mode: $("modeSelect").value, model: $("modelSelect").value || undefined}});
+    if (data.configuration_required === "channel_role_access") {
+      toast(data.message);
+      await openChannelRolePermissions();
+      return;
+    }
     if (data.needs_clarification) throw new Error(data.question || "Décris une modification précise.");
     app.plan = data.plan;
     $("requestText").value = data.plan.prompt; // Remove old clarification lines.
@@ -741,6 +756,42 @@ async function createPlan() {
     $("planPanel").scrollIntoView({behavior: "smooth", block: "nearest"}); toast("Plan créé. Vérifie les actions avant de valider.");
   } catch (e) { toast(e.message, true); }
   finally { app.busy = false; $("generateButton").textContent = "✦ Préparer le plan  →"; renderOverview(); }
+}
+
+async function openChannelRolePermissions() {
+  if (!app.selected) return toast("Sélectionne un serveur.", true);
+  const guildId = app.selected;
+  const context = await request(`/api/permissions/${guildId}`);
+  if (!context.channels.length || !context.roles.length) return toast("Ce serveur n'a pas les salons ou rôles nécessaires.", true);
+  const recent = context.recent_channels || [];
+  const scopes = [
+    ...(recent.length ? [{value: "recent", label: `Les ${recent.length} salon(s) de la dernière création réussie`}] : []),
+    ...context.channels.map(c => ({value: c.id, label: `${c.type === "voice" ? "🔊" : "#"} ${c.name}`}))
+  ];
+  const options = [{value: "keep", label: "Ne pas modifier"}, {value: "allow", label: "Autoriser"},
+                   {value: "deny", label: "Refuser"}, {value: "inherit", label: "Revenir à l'héritage"}];
+  modal({title: "Permissions des salons", description: "Choisis un rôle et ce qu'il peut voir ou faire. Pour les salons vocaux, « Écrire/Rejoindre » gère la connexion. Les accès à @everyone peuvent exposer des salons privés. Une prévisualisation doit encore être validée avant toute modification.",
+    fields: [
+      {id: "scope", type: "select", label: "Salon(s) à configurer", options: scopes, value: recent.length ? "recent" : context.channels[0].id},
+      {id: "role_id", type: "select", label: "Rôle concerné", options: [{value: "", label: "Choisir un rôle…"},
+        ...context.roles.map(r => ({value: r.id, label: r.name}))]},
+      {id: "view", type: "select", label: "Voir le salon", options},
+      {id: "participate", type: "select", label: "Écrire / rejoindre un vocal", options},
+      {id: "confirmed", type: "checkbox", checked: false, label: "Je confirme ces choix pour les salons et le rôle sélectionnés"}
+    ], confirmText: "Préparer le plan", onConfirm: async values => {
+      if (!values.confirmed) throw new Error("Confirme les paramètres choisis.");
+      if (!values.role_id) throw new Error("Sélectionne un rôle.");
+      if (values.view === "keep" && values.participate === "keep") throw new Error("Choisis au moins une permission à modifier.");
+      const channels = values.scope === "recent" ? recent.map(c => c.id) : [values.scope];
+      if (!channels.length) throw new Error("Aucun salon créé récemment n'est encore disponible.");
+      const result = await request(`/api/permissions/${guildId}/draft`, {data: {
+        channels, role_id: values.role_id, view: values.view, participate: values.participate
+      }});
+      app.plan = result.plan;
+      switchTab("studio"); renderPlan(); await loadHistory();
+      $("planPanel").scrollIntoView({behavior: "smooth", block: "nearest"});
+      toast("Plan de permissions créé. Vérifie le rôle et les salons avant de valider.");
+    }});
 }
 
 async function preset(id) {
@@ -964,6 +1015,7 @@ async function init() {
   $("catalogCategory").onchange = renderCatalog;
   $("catalogExternalOnly").onchange = renderCatalog;
   $("refreshModules").onclick = async () => { await loadDetails(); await Promise.all([loadModules(), loadInteractive()]); };
+  $("configureChannelRoles").onclick = async () => { try { await openChannelRolePermissions(); } catch(e) { toast(e.message, true); } };
   $("pollForm").onsubmit = e => { e.preventDefault(); createInteractive("poll"); };
   $("giveawayForm").onsubmit = e => { e.preventDefault(); createInteractive("giveaway"); };
   $("quizForm").onsubmit = e => { e.preventDefault(); createInteractive("quiz"); };
