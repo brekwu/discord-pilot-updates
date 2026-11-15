@@ -1,6 +1,7 @@
 """Non-destructive regression tests for conversational Discord instructions."""
 
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -9,11 +10,21 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import app
 from planner import (collapse_old_clarifications, default_creation_plan,
-                     local_parse, missing_information, parse_ollama_decision)
+                     channel_role_configuration_request, local_parse,
+                     missing_information, parse_ollama_decision, validate_actions)
 from storage import State
 
 
 class LocalLanguageTests(unittest.TestCase):
+    def test_ambiguous_role_access_request_requires_explicit_choices(self):
+        self.assertTrue(channel_role_configuration_request("Gère les rôles des salons que tu viens de créer"))
+        self.assertTrue(channel_role_configuration_request("Configure les permissions des salons"))
+        self.assertFalse(channel_role_configuration_request("Crée un salon annonces et ajoute des rôles"))
+        self.assertFalse(channel_role_configuration_request("Gère les rôles des salons puis supprime général"))
+        with self.assertRaises(ValueError):
+            validate_actions([{"type": "set_channel_role_access", "channel_id": "223456789012345678",
+                               "role_id": "123456789012345678", "view": "keep", "participate": "keep"}])
+
     def test_rajoute_channel_synonyms(self):
         for phrase in ("Rajoute un channel annonces", "Rajoute-moi un channel nommé annonces",
                        "Ajoute le salon annonces", "Crée un canal annonces"):
@@ -304,6 +315,49 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
             {"type": "set_module", "module": "activity_stats", "enabled": "true"},
         ])
 
+    async def test_recent_channels_role_permissions_require_a_confirmed_draft(self):
+        gid, cid, rid = "1567347687379050727", "223456789012345678", "123456789012345678"
+        class FakeText:
+            def __init__(self):
+                self.id, self.name = int(cid), "annonces"
+
+        class FakeVoice:
+            pass
+
+        channel = FakeText()
+        role = SimpleNamespace(id=int(rid), name="Membre", managed=False)
+        guild = SimpleNamespace(channels=[channel], roles=[role],
+                                get_channel=lambda x: channel if x == channel.id else None,
+                                get_role=lambda x: role if x == role.id else None)
+        old = app.STATE.add(gid, "Crée un salon annonces", [{"type": "create_text_channel", "name": "annonces"}], "local")
+        old["status"] = "completed"
+        old["results"] = [{"index": 0, "status": "done", "detail": f"Salon créé (ID {cid})."}]
+        app.STATE.save()
+        with patch.object(app.MANAGER, "get_guild", return_value=guild), \
+             patch.object(app.discord, "TextChannel", FakeText), \
+             patch.object(app.discord, "VoiceChannel", FakeVoice), \
+             patch.object(app, "ollama_models", new=AsyncMock(side_effect=AssertionError("Ollama inutilisé"))):
+            prompt = await self.client.post("/api/plan", json={"guild_id": gid, "mode": "auto",
+                "prompt": "Gère les rôles des salons que tu viens de créer"}, headers=self.headers)
+            self.assertEqual(prompt.status, 200)
+            self.assertEqual((await prompt.json())["configuration_required"], "channel_role_access")
+            self.assertEqual(len(app.STATE.history(gid)), 1)
+            context = await self.client.get(f"/api/permissions/{gid}")
+            self.assertEqual(context.status, 200)
+            self.assertEqual((await context.json())["recent_channels"],
+                             [{"id": cid, "name": "annonces", "type": "text"}])
+            payload = {"channels": [cid], "role_id": rid, "view": "deny", "participate": "keep"}
+            self.assertEqual((await self.client.post(f"/api/permissions/{gid}/draft", json=payload)).status, 403)
+            other = {**payload, "channels": ["333333333333333333"]}
+            self.assertEqual((await self.client.post(f"/api/permissions/{gid}/draft", json=other,
+                                                      headers=self.headers)).status, 400)
+            draft = await self.client.post(f"/api/permissions/{gid}/draft", json=payload, headers=self.headers)
+            self.assertEqual(draft.status, 200)
+            new_plan = (await draft.json())["plan"]
+            self.assertEqual(new_plan["status"], "draft")
+            self.assertEqual(new_plan["actions"], [{"type": "set_channel_role_access",
+                 "channel_id": cid, "role_id": rid, "view": "deny", "participate": "keep"}])
+
     async def test_ai_cannot_invent_deletion(self):
         prompt = {"guild_id": "1567347687379050727", "mode": "ollama", "prompt": "Arrange les salons"}
         with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
@@ -311,6 +365,16 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
             res = await self.client.post("/api/plan", json=prompt, headers=self.headers)
         self.assertEqual(res.status, 400)
         self.assertEqual(app.STATE.history("1567347687379050727"), [])
+
+    async def test_ai_cannot_invent_role_permissions_even_with_valid_ids(self):
+        prompt = {"guild_id": "1567347687379050727", "mode": "ollama", "prompt": "Organise les membres"}
+        invented = [{"type": "set_channel_role_access", "channel_id": "223456789012345678",
+                     "role_id": "123456789012345678", "view": "allow", "participate": "allow"}]
+        with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
+             patch.object(app, "ollama_plan", new=AsyncMock(return_value=(invented, None))):
+            result = await self.client.post("/api/plan", json=prompt, headers=self.headers)
+        self.assertEqual(result.status, 400)
+        self.assertEqual(app.STATE.history(prompt["guild_id"]), [])
 
 
 if __name__ == "__main__":
