@@ -18,6 +18,7 @@ ACTION_TYPES = {
     "configure_welcome", "configure_farewell", "configure_invites",
     "suggest_integration",
     "set_module",
+    "set_channel_role_access",
 }
 
 ACTION_LABELS = {
@@ -37,6 +38,7 @@ ACTION_LABELS = {
     "configure_invites": "Activer le suivi des invitations",
     "suggest_integration": "Préparer l'autorisation du bot externe",
     "set_module": "Activer ou désactiver un module local",
+    "set_channel_role_access": "Définir les accès d'un rôle à un salon",
 }
 
 DANGEROUS_ACTIONS = {"delete_channel", "delete_role"}
@@ -58,6 +60,7 @@ FIELDS = {
     "configure_invites": ("channel",),
     "suggest_integration": ("provider",),
     "set_module": ("module", "enabled"),
+    "set_channel_role_access": ("channel_id", "role_id", "view", "participate"),
 }
 
 OPTIONAL = {
@@ -166,6 +169,13 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
         if kind == "set_module" and (fields["module"] not in {"xp", "antispam", "antilinks", "activity_stats"}
                                      or fields["enabled"] not in {"true", "false"}):
             raise ValueError("Ce module ne peut pas être piloté sans paramètres. Ouvre l'onglet Modules actifs.")
+        if kind == "set_channel_role_access":
+            if not all(re.fullmatch(r"[0-9]{17,20}", fields[key]) for key in ("channel_id", "role_id")):
+                raise ValueError("Sélectionne un salon et un rôle existants par leurs identifiants Discord.")
+            choices = {"allow", "deny", "inherit", "keep"}
+            if (fields["view"] not in choices or fields["participate"] not in choices
+                    or (fields["view"] == "keep" and fields["participate"] == "keep")):
+                raise ValueError("Choisis au moins une permission à modifier (autoriser, refuser ou héritage).")
         if kind == "send_message" and len(fields["content"]) > 1800:
             raise ValueError("Le message dépasse la limite de 1 800 caractères.")
         if kind != "send_message" and any(len(v) > 900 for v in fields.values()):
@@ -412,6 +422,16 @@ def default_creation_plan(prompt: str) -> list[dict[str, str]]:
     return []
 
 
+def channel_role_configuration_request(prompt: str) -> bool:
+    """Recognize a vague channel permissions request, never infer access grants."""
+    phrase = norm(prompt).strip(" .!?")
+    phrase = re.sub(r"^(?:je veux(?: que tu)?|tu peux|peux tu|il faut(?: que tu)?)\s+", "", phrase)
+    return bool(re.fullmatch(
+        r"(?:gere|gerer|configure|configurer|regle|regler|parametre|parametrer)\s+"
+        r"(?:les?\s+)?(?:roles?|permissions?|acces)\s+(?:des?|aux?|de mes)\s+salons?"
+        r"(?:\s+que tu viens de creer|\s+du serveur)?", phrase))
+
+
 PRESETS = {
     "communaute": {
         "label": "Serveur communauté",
@@ -575,6 +595,9 @@ def description(item: dict[str, str]) -> str:
     label = ACTION_LABELS[item["type"]]
     if item["type"] == "set_module":
         return f"{'Activer' if item['enabled'] == 'true' else 'Désactiver'} {MODULES[item['module']]['title']}"
+    if item["type"] == "set_channel_role_access":
+        return (f"Accès du rôle {item['role_id']} au salon {item['channel_id']} : "
+                f"voir={item['view']}, écrire/rejoindre={item['participate']}")
     if item["type"] == "suggest_integration":
         return f"{label} : {PROVIDERS[item['provider']]['name']} (validation Discord obligatoire)"
     if item["type"].startswith("configure_"):
