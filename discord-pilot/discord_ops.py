@@ -149,6 +149,29 @@ async def execute_action(guild: discord.Guild, item: dict, state=None) -> tuple[
         await channel.set_permissions(role, overwrite=role_overwrite, reason=reason)
         await channel.set_permissions(everyone, overwrite=every_overwrite, reason=reason)
         return "done", "Accès fermé à @everyone et autorisé au rôle choisi."
+    if t == "set_channel_role_access":
+        channel = guild.get_channel(int(item["channel_id"]))
+        role = guild.get_role(int(item["role_id"]))
+        if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+            raise ValueError("Ce salon n'existe plus ou n'est pas textuel/vocal sur ce serveur.")
+        if role is None or getattr(role, "managed", False):
+            raise ValueError("Le rôle choisi n'existe plus ou est géré par une autre intégration.")
+        choices = {"allow": True, "deny": False, "inherit": None}
+        overwrite = channel.overwrites_for(role)
+        changed = False
+        if item["view"] != "keep":
+            target = choices[item["view"]]
+            changed = changed or overwrite.view_channel is not target
+            overwrite.view_channel = target
+        permission = "send_messages" if isinstance(channel, discord.TextChannel) else "connect"
+        if item["participate"] != "keep":
+            target = choices[item["participate"]]
+            changed = changed or getattr(overwrite, permission) is not target
+            setattr(overwrite, permission, target)
+        if not changed:
+            return "skipped", "Ces permissions sont déjà configurées pour ce rôle."
+        await channel.set_permissions(role, overwrite=overwrite, reason=reason)
+        return "done", "Permissions de visibilité et d'écriture/connexion mises à jour pour le rôle choisi."
     if t == "delete_channel":
         channel = channel_by_name(guild, item["name"])
         await channel.delete(reason=reason)
