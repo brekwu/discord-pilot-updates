@@ -39,7 +39,7 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer la correction de planification IA 0.5.10
+      - name: Appliquer la configuration guidee des permissions 0.5.11
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
@@ -59,6 +59,7 @@ jobs:
           Copy-Item 'discord-pilot/tests/test_api.py' 'buildsrc/discord-pilot/tests/test_api.py' -Force
           Copy-Item 'discord-pilot/tests/test_voice_webm.py' 'buildsrc/discord-pilot/tests/test_voice_webm.py' -Force
           Copy-Item 'discord-pilot/tests/test_natural_language.py' 'buildsrc/discord-pilot/tests/test_natural_language.py' -Force
+          Copy-Item 'discord-pilot/tests/test_executor.py' 'buildsrc/discord-pilot/tests/test_executor.py' -Force
           Copy-Item 'discord-pilot/tests/test_automations.py' 'buildsrc/discord-pilot/tests/test_automations.py' -Force
           Copy-Item 'discord-pilot/tests/test_integrations.py' 'buildsrc/discord-pilot/tests/test_integrations.py' -Force
           Copy-Item 'discord-pilot/tests/test_community_modules.py' 'buildsrc/discord-pilot/tests/test_community_modules.py' -Force
@@ -96,7 +97,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.10' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.11' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -159,6 +160,9 @@ jobs:
             $statsPrompt = @{guild_id='1567347687379050727';mode='auto';prompt='Active les statistiques des messages'} | ConvertTo-Json
             $statsDraft = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/plan' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($statsPrompt)) -TimeoutSec 90
             if ($statsDraft.plan.status -ne 'draft' -or $statsDraft.plan.actions.Count -ne 1 -or $statsDraft.plan.actions[0].module -ne 'activity_stats') { throw 'La demande de statistiques est restee sans action alors que le module natif existe.' }
+            $rolesPrompt = @{guild_id='1567347687379050727';mode='auto';prompt='Gere les roles des salons que tu viens de creer'} | ConvertTo-Json
+            $rolesDraft = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/plan' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($rolesPrompt)) -TimeoutSec 90
+            if ($rolesDraft.configuration_required -ne 'channel_role_access' -or $page.Content -notmatch 'configureChannelRoles') { throw 'La demande de permissions ne propose pas le formulaire guide.' }
             $catalogue = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/catalog' -TimeoutSec 10
             if ($catalogue.features.Count -ne 90 -or -not $catalogue.providers.jockie.url -or $page.Content -notmatch 'catalogTab') { throw 'Le catalogue des integrations est absent du vrai EXE Windows.' }
             $musicPrompt = @{guild_id='1567347687379050727';mode='auto';prompt='Ajoute un bot musical, des tickets, une protection antiraid et des niveaux'} | ConvertTo-Json
@@ -206,7 +210,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.10' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.11' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -239,7 +243,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $boot = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
-                if ($boot.version -eq '0.5.10') { $ready = $true; break }
+                if ($boot.version -eq '0.5.11') { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw 'L EXE s est arrete avant de preparer la mise a jour.' }
             }
@@ -249,7 +253,7 @@ jobs:
             # restart without needing to build an unpublishable second binary.
             Copy-Item $installed (Join-Path $updates 'pending.exe') -Force
             $hash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-            $pending = @{version='0.5.10';sha256=$hash;format='exe'} | ConvertTo-Json
+            $pending = @{version='0.5.11';sha256=$hash;format='exe'} | ConvertTo-Json
             [System.IO.File]::WriteAllText((Join-Path $updates 'pending.json'), $pending)
             $response = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/update/apply' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$boot.csrf} -Body '{}'
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
@@ -260,10 +264,10 @@ jobs:
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
                 $logPath = Join-Path $dataRoot 'updater.log'
-                if ($boot2.version -eq '0.5.10' -and
+                if ($boot2.version -eq '0.5.11' -and
                     -not (Test-Path (Join-Path $updates 'pending.json')) -and
                     (Test-Path $logPath) -and
-                    (Select-String -Path $logPath -Pattern 'Version 0.5.10 installee et ouverte' -Quiet)) {
+                    (Select-String -Path $logPath -Pattern 'Version 0.5.11 installee et ouverte' -Quiet)) {
                   $restarted = $true
                   break
                 }
@@ -311,11 +315,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.5.10
+          name: DiscordPilot_EXE_Windows_v0.5.11
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
 
-      - name: Publier la version 0.5.10 après les tests Windows
+      - name: Publier la version 0.5.11 après les tests Windows
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -331,23 +335,23 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Correctif du planificateur IA : reconnaissance stricte des reponses Ollama encadrees par plan, commands, result ou action unique, correction des messages en cas de plan vide et activation locale des statistiques de messages sans modele. Les 17 modules existants sont conserves. Aucun changement applique automatiquement si la demande est inconnue. Tests Python, frontend et EXE Windows.'
-          $tag = 'v0.5.10'
+          $notes = 'Gestion guidee des permissions des salons : la demande Gere les roles des salons que tu viens de creer ouvre maintenant un formulaire. Retrouve les salons de la derniere creation reussie, ou selectionne un salon existant et un role. Autorise, refuse, laisse inchange ou restaure l heritage de la visibilite et de l ecriture/connexion. Brouillon obligatoire avant execution, aucune permission choisie automatiquement. Tests Python, frontend et EXE Windows.'
+          $tag = 'v0.5.11'
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe $archive --clobber
           } else {
-            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.10' --notes $notes
+            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.11' --notes $notes
           }
           if ($LASTEXITCODE -ne 0) { throw 'La publication de la release a échoué.' }
 
           $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $archiveSha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
-            version = '0.5.10'
-            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.10/DiscordPilot_Source.zip'
+            version = '0.5.11'
+            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.11/DiscordPilot_Source.zip'
             sha256 = $archiveSha
-            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.10/DiscordPilot.exe'
+            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.11/DiscordPilot.exe'
             exe_sha256 = $exeSha
           }
           $json = ConvertTo-Json -InputObject $manifest -Depth 3
@@ -355,7 +359,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add update.json
-          git commit -m 'chore: publier le manifeste 0.5.10'
+          git commit -m 'chore: publier le manifeste 0.5.11'
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être enregistré.' }
           git push origin HEAD:main
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être publié.' }
