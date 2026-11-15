@@ -210,10 +210,14 @@ function modal({title, description, fields = [], confirmText = "Confirmer", onCo
       inputs[f.id] = inp; wrapper.append(inp, dom("span", "", f.label)); nodes.push(wrapper); return;
     }
     const label = dom("label", "modal-label", f.label);
-    const inp = dom(f.type === "select" ? "select" : "input", "modal-input"); inp.id = `modal-${f.id}`;
+    const inp = dom(f.type === "select" ? "select" : f.type === "textarea" ? "textarea" : "input", "modal-input"); inp.id = `modal-${f.id}`;
     if (f.type === "select") {
       for (const option of f.options || []) { const child = dom("option", "", option.label); child.value = option.value; inp.append(child); }
-    } else { inp.type = f.type || "text"; inp.placeholder = f.placeholder || ""; inp.autocomplete = f.autocomplete || "off"; }
+    } else {
+      if (f.type === "textarea") inp.rows = 4;
+      else inp.type = f.type || "text";
+      inp.placeholder = f.placeholder || ""; inp.autocomplete = f.autocomplete || "off";
+    }
     inp.value = f.value || "";
     inputs[f.id] = inp; label.htmlFor = inp.id; nodes.push(label, inp);
   });
@@ -749,7 +753,21 @@ async function createPlan() {
       await openChannelRolePermissions();
       return;
     }
-    if (data.needs_clarification) throw new Error(data.question || "Décris une modification précise.");
+    if (data.needs_clarification) {
+      const examples = (data.examples || []).slice(0, 3).join(" · ");
+      modal({title: "Préciser la demande", description: data.question || "Quel changement précis veux-tu faire ?",
+        fields: [
+          {type: "info", text: `Aucune modification effectuée. Exemples : ${examples}`},
+          {id: "instruction", type: "textarea", label: "Reformule ta demande", value: prompt,
+           placeholder: "Décris une action précise, par exemple « Crée un salon annonces »"}
+        ], confirmText: "Préparer ce plan", onConfirm: async ({instruction}) => {
+          const revised = instruction.trim();
+          if (revised.length < 3 || revised === prompt) throw new Error("Modifie la demande en précisant l'action à effectuer.");
+          $("requestText").value = revised;
+          setTimeout(() => createPlan(), 0);
+        }});
+      return;
+    }
     app.plan = data.plan;
     $("requestText").value = data.plan.prompt; // Remove old clarification lines.
     renderPlan(); await loadHistory();
