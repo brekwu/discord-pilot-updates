@@ -109,6 +109,10 @@ La phrase **« Gère les rôles des salons que tu viens de créer »** ouvre dé
 
 Choisis le rôle, un salon précis ou les derniers salons créés, puis pour chaque permission : **autoriser, refuser, ne pas modifier, revenir à l'héritage**. Seules la visibilité et l'écriture (ou la connexion aux vocaux) sont modifiables par cet outil. Un brouillon à valider est créé avant toute action Discord. Le rôle `@everyone` peut être sélectionné explicitement : autoriser sa visibilité peut exposer un salon privé, donc vérifie soigneusement le plan. Le bot doit disposer de **Gérer les rôles** et du droit de modifier les salons concernés.
 
+### Demandes que l'IA ne sait pas convertir (v0.5.12)
+
+Si le modèle Ollama retourne une liste vide, pose une question ou renvoie un format inexploitable après une tentative de réparation, Discord Pilot **n'invente aucune action**. Il affiche une fenêtre pour reformuler la demande, en conservant la phrase originale et en donnant des exemples d'actions prises en charge. L'utilisateur peut la modifier puis relancer la préparation. Une demande générale sur les accès des salons ouvre directement le sélecteur de permissions. Aucune action Discord ne part sans un brouillon valide puis une confirmation explicite.
+
 Si aucune création de salon n'est enregistrée comme réussie, tu peux choisir les salons existants individuellement. Les permissions ne peuvent pas être choisies automatiquement sans connaître les règles d'accès souhaitées.
 
 ### Modules natifs locaux (v0.5.11)

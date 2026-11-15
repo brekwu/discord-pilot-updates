@@ -425,11 +425,25 @@ def default_creation_plan(prompt: str) -> list[dict[str, str]]:
 def channel_role_configuration_request(prompt: str) -> bool:
     """Recognize a vague channel permissions request, never infer access grants."""
     phrase = norm(prompt).strip(" .!?")
-    phrase = re.sub(r"^(?:je veux(?: que tu)?|tu peux|peux tu|il faut(?: que tu)?)\s+", "", phrase)
-    return bool(re.fullmatch(
+    phrase = re.sub(r"^(?:je veux(?: que tu)?|tu peux|peux tu|il faut(?: que tu)?|stp|s'il te plait)\s+", "", phrase)
+    if re.fullmatch(
         r"(?:gere|gerer|configure|configurer|regle|regler|parametre|parametrer)\s+"
         r"(?:les?\s+)?(?:roles?|permissions?|acces)\s+(?:des?|aux?|de mes)\s+salons?"
-        r"(?:\s+que tu viens de creer|\s+du serveur)?", phrase))
+        r"(?:\s+que tu viens de creer|\s+du serveur)?", phrase):
+        return True
+    # Conversational variants such as "Configure les accès aux salons pour les
+    # membres" must open the role selector. Do not turn a creation/deletion
+    # request into permissions or infer an access grant from a role name.
+    requested = re.sub(r"\b(?:que tu viens de|que tu as|recemment)\s+crees?\b", "", phrase)
+    if re.search(r"\b(?:cree\w*|ajoute\w*|supprime\w*|efface\w*|delete|renomme\w*)\b", requested):
+        return False
+    mentions_channel = bool(re.search(r"\b(?:salons?|channels?|canaux?|vocaux?|vocal)\b", phrase))
+    mentions_access = bool(re.search(
+        r"\b(?:roles?|permissions?|acces|visibilite|droit\w*|prive\w*|autoris\w*|interdi\w*)\b", phrase))
+    asks_change = bool(re.search(
+        r"\b(?:gere\w*|configur\w*|regle\w*|parametr\w*|organis\w*|modifi\w*|met\w*|mets|"
+        r"defini\w*|attribu\w*|permet\w*|qui peut|rends|rendre)\b", phrase))
+    return mentions_channel and mentions_access and asks_change
 
 
 PRESETS = {
