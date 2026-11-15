@@ -103,7 +103,15 @@ manquées pendant que le bot est fermé : ce total peut donc être inférieur au
 nombre historique réel. Quand l'invitant est ambigu, aucun compte n'est inventé.
 Le maximum du compteur confirmé est conservé entre les redémarrages.
 
-### Modules natifs locaux (v0.5.10)
+### Gestion guidée des rôles et des salons (v0.5.11)
+
+La phrase **« Gère les rôles des salons que tu viens de créer »** ouvre désormais la configuration de permissions : Discord Pilot recherche les salons textuels ou vocaux de la **dernière création réellement réussie** dans l'historique du serveur connecté. Un bouton **Gérer les rôles et accès des salons** permet aussi d'ouvrir cet écran directement.
+
+Choisis le rôle, un salon précis ou les derniers salons créés, puis pour chaque permission : **autoriser, refuser, ne pas modifier, revenir à l'héritage**. Seules la visibilité et l'écriture (ou la connexion aux vocaux) sont modifiables par cet outil. Un brouillon à valider est créé avant toute action Discord. Le rôle `@everyone` peut être sélectionné explicitement : autoriser sa visibilité peut exposer un salon privé, donc vérifie soigneusement le plan. Le bot doit disposer de **Gérer les rôles** et du droit de modifier les salons concernés.
+
+Si aucune création de salon n'est enregistrée comme réussie, tu peux choisir les salons existants individuellement. Les permissions ne peuvent pas être choisies automatiquement sans connaître les règles d'accès souhaitées.
+
+### Modules natifs locaux (v0.5.11)
 
 **Correction v0.5.10 du planificateur IA :** accepte désormais certaines réponses JSON courantes d'Ollama (`plan`, `commands`, `result`, ou une action unique) tout en appliquant exactement la même liste d'actions autorisées. « Active les statistiques des messages » peut être traité localement sans dépendre d'Ollama. Si le modèle ne peut toujours pas produire un plan, l'application explique les opérations possibles et propose l'onglet Modules actifs pour les fonctions nécessitant des paramètres ; elle n'invente pas une action à exécuter.
 
