@@ -144,10 +144,41 @@ async function testFullMicrophoneLifecycle() {
   assert.equal(elements.voicePreview.hidden, false, "the user should be able to replay audio");
 }
 
+async function testEmptyModelPlanShowsEditableGuidance() {
+  const elements = {
+    requestText: {value: "Arrange le serveur à ta convenance"},
+    generateButton: {textContent: ""},
+    modeSelect: {value: "auto"},
+    modelSelect: {value: ""},
+  };
+  const ctx = {
+    document: {getElementById: id => elements[id]},
+    localStorage: {getItem: () => ""},
+    window: {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, {filename: "web/app.js"});
+  vm.runInContext(`
+    app.selected = "1567347687379050727";
+    renderOverview = () => {};
+    request = async () => ({needs_clarification: true, question: "Quel changement précis ?",
+      examples: ["Crée un salon annonces", "Crée un rôle Membre"]});
+    modal = config => {globalThis.lastModal = config;};
+  `, ctx);
+  await vm.runInContext("createPlan()", ctx);
+  assert.equal(ctx.lastModal.title, "Préciser la demande");
+  assert.equal(ctx.lastModal.fields.find(f => f.id === "instruction").value,
+    "Arrange le serveur à ta convenance", "the user's original request must be preserved");
+  assert.match(ctx.lastModal.fields[0].text, /Aucune modification effectuée/);
+  await assert.rejects(ctx.lastModal.onConfirm({instruction: "Arrange le serveur à ta convenance"}),
+    /Modifie la demande/);
+}
+
 (async () => {
   await testVoiceRecorderPreservesAllChunks();
   await testFullMicrophoneLifecycle();
+  await testEmptyModelPlanShowsEditableGuidance();
   await simulateUpdate({portChanged: false});
   await simulateUpdate({portChanged: true});
-  process.stdout.write("Frontend tests OK: background recorder chunks, playback, transcription, update recovery.\n");
+  process.stdout.write("Frontend tests OK: guidance, recorder, transcription, update recovery.\n");
 })().catch(error => {console.error(error); process.exitCode = 1;});
