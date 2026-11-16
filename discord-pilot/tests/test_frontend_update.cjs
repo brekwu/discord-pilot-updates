@@ -155,6 +155,7 @@ async function testEmptyModelPlanShowsEditableGuidance() {
     document: {getElementById: id => elements[id]},
     localStorage: {getItem: () => ""},
     window: {},
+    setTimeout: fn => {ctx.deferredRetry = fn; return 1;},
   };
   vm.createContext(ctx);
   vm.runInContext(source, ctx, {filename: "web/app.js"});
@@ -171,7 +172,10 @@ async function testEmptyModelPlanShowsEditableGuidance() {
     "Arrange le serveur à ta convenance", "the user's original request must be preserved");
   assert.match(ctx.lastModal.fields[0].text, /Aucune modification effectuée/);
   await assert.rejects(ctx.lastModal.onConfirm({instruction: "Arrange le serveur à ta convenance"}),
-    /Modifie la demande/);
+    /Reformule la demande/);
+  await ctx.lastModal.onConfirm({instruction: "Arrange le serveur à ta convenance", detail: "Crée un salon annonces"});
+  assert.match(elements.requestText.value, /^Arrange le serveur à ta convenance\nPrécision : Crée un salon annonces$/);
+  assert.equal(typeof ctx.deferredRetry, "function", "the edited request should be resubmitted after the modal closes");
 }
 
 (async () => {
