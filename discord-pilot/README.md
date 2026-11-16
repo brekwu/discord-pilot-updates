@@ -139,7 +139,7 @@ Les boutons utilisent les gestionnaires natifs existants : création/archivage d
 
 La recette automatisée teste la chaîne « créer catégorie et rôle → créer salon → configurer tickets → publier le panneau », les interactions simulées et le vrai exécutable Windows **hors connexion Discord**. Un test de bout en bout sur un serveur Discord réel et sur le modèle Ollama de ton PC reste indispensable ; aucun serveur réel n'a été modifié par cette recette.
 
-### P4 — Demandes complètes et diagnostic Discord connecté (v0.5.16)
+### P4 — Demandes complètes et diagnostic Discord connecté (v0.5.17)
 
 Sans Ollama, le Studio sait maintenant préparer un **plan unique** à partir de certaines demandes composées : créer une catégorie, ses salons et rôles, rendre le salon de validation privé, activer les tickets ou candidatures et publier le panneau interactif. Les ressources nécessaires doivent être nommées dans la demande. Exemple : « Crée une catégorie SUPPORT et un salon tickets dans la catégorie SUPPORT et un rôle Support puis active les tickets et publie le panneau des tickets ». Le modèle de serveur **communauté, tournoi, entreprise ou support** peut aussi être demandé en français. Les modules sans paramètres XP, anti-spam, anti-liens et statistiques peuvent être activés ensemble dans une instruction explicite.
 
