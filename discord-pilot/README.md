@@ -123,6 +123,14 @@ Si une précision est nécessaire, la fenêtre garde la demande d'origine et pro
 
 Si aucune création de salon n'est enregistrée comme réussie, tu peux choisir les salons existants individuellement. Les permissions ne peuvent pas être choisies automatiquement sans connaître les règles d'accès souhaitées.
 
+### P2 — Permissions ciblées, modules et enchaînement (v0.5.14)
+
+Le planificateur accepte `set_role_access` pour modifier **uniquement** la visibilité et l'écriture ou la connexion d'un rôle précis dans un salon précis, par nom ou ID. Il reconnaît aussi localement des demandes explicites comme « Autorise le rôle Membre à voir le salon annonces ». Les demandes floues restent dirigées vers le sélecteur de permissions. Un modèle n'a pas le droit d'inventer des changements de permissions à partir d'une simple demande de rangement.
+
+L'action `configure_module` permet de préparer les paramètres des **17 modules natifs** avec un nom de salon/rôle ou un ID Discord. Les paramètres sont vérifiés selon le formulaire réel de chaque module : un salon privé requis doit être effectivement privé, un ID doit exister sur le serveur, et une information manquante interdit l'activation. Les objets créés plus tôt dans le même plan peuvent être réutilisés immédiatement, même avant la mise à jour du cache Discord.
+
+Les étapes d'un plan sont exécutées **dans l'ordre**. En cas d'échec, les suivantes sont marquées « Non exécuté » pour éviter une configuration incomplète. Les opérations idempotentes de permissions et de renommage peuvent être retentées **une seule fois** sur des erreurs HTTP transitoires ; jamais les suppressions, publications ou créations. Toutes les actions restent soumises à la confirmation du brouillon. Un modèle local Ollama doit être installé pour interpréter les configurations complexes qui ne correspondent pas aux commandes hors ligne reconnues.
+
 ### Modules natifs locaux (v0.5.11)
 
 **Correction v0.5.10 du planificateur IA :** accepte désormais certaines réponses JSON courantes d'Ollama (`plan`, `commands`, `result`, ou une action unique) tout en appliquant exactement la même liste d'actions autorisées. « Active les statistiques des messages » peut être traité localement sans dépendre d'Ollama. Si le modèle ne peut toujours pas produire un plan, l'application explique les opérations possibles et propose l'onglet Modules actifs pour les fonctions nécessitant des paramètres ; elle n'invente pas une action à exécuter.
