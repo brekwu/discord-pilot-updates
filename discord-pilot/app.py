@@ -26,10 +26,13 @@ from aiohttp import web
 import discord
 
 from discord_ops import execute_action
+from discord_diagnostics import inspect_guild
 from community_interactions import OPTION_EMOJIS, poll_summary, utc_timestamp, validate_event
 from community_modules import (MODULES, SpamTracker, normalize_module,
                                paris_slot, public_modules, should_filter)
 from community_support import parse_dm_target, parse_staff_reply, staff_allowed, validate_application
+from conversational_workflows import (batch_module_plan, guided_workflow_plan,
+                                      server_preset_plan)
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from panel_actions import publish_panel
 from panel_planning import (complete_panel_plan, direct_panel_plan,
@@ -1540,6 +1543,10 @@ async def api_update_apply(request):
 
 def supported_local_plan(prompt: str) -> list[dict]:
     """Compose several individually understood clauses without dropping any."""
+    guided = (guided_workflow_plan(prompt) or server_preset_plan(prompt)
+              or batch_module_plan(prompt))
+    if guided:
+        return guided
     event_plan = community_automation_plan(prompt)
     if event_plan and not re.search(
         r"\b(?:et|puis|ensuite)\s+(?:active\w*|desactive\w*|désactive\w*|"
@@ -1674,7 +1681,16 @@ async def ollama_plan(prompt: str, model: str, context: dict | None = None) -> t
 def plan_clarification(prompt: str, model_question: str | None = None) -> dict:
     """A safe, editable next step when no supported action was produced."""
     requested = norm(prompt)
-    if re.search(r"\b(?:salons?|channels?|canaux?|vocaux?|roles?|permissions?|acces)\b", requested):
+    if re.search(r"\b(?:tickets?|candidatures?)\b", requested) and re.search(
+            r"\b(?:active\w*|installe\w*|configur\w*|mets\s+en\s+place)\b", requested):
+        examples = [
+            "Crée une catégorie SUPPORT et un salon tickets dans SUPPORT puis active les tickets",
+            "Crée une catégorie RECRUTEMENT et un salon candidatures dans la catégorie RECRUTEMENT et un salon validation dans la catégorie RECRUTEMENT et un rôle RH puis rends le salon validation privé pour le rôle RH puis active les candidatures",
+            "Publie le panneau des tickets",
+        ]
+        question = ("Quels salons, catégorie et rôle veux-tu utiliser ? "
+                    "Pour les candidatures, indique aussi le salon de validation privé.")
+    elif re.search(r"\b(?:salons?|channels?|canaux?|vocaux?|roles?|permissions?|acces)\b", requested):
         examples = ["Crée un salon annonces", "Crée un rôle Membre",
                     "Configure les permissions des salons"]
         question = "Quel salon ou rôle veux-tu modifier, et quel changement précis faut-il faire ?"
@@ -1741,6 +1757,35 @@ async def api_plan(request):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used)
     return web.json_response({"plan": plan})
+
+
+async def api_live_test(request):
+    """Perform an explicit connected check, with optional temporary test room."""
+    if EXIT_FOR_UPDATE:
+        raise ValueError("Mise à jour en cours : test indisponible.")
+    data = await body_json(request)
+    guild_id = require_id(data.get("guild_id"))
+    mode = data.get("mode")
+    if mode not in {"read_only", "active"}:
+        raise ValueError("Choisis un diagnostic en lecture seule ou un test actif.")
+    guild = MANAGER.get_guild(guild_id)
+    if guild is None:
+        raise ValueError("Bot non connecté à ce serveur : aucun test réel possible.")
+    try:
+        if mode == "active":
+            # Serialize with configuration plans: no room is created while another
+            # request is applying changes to the same Discord server.
+            async with LOCKS.setdefault(guild_id, asyncio.Lock()):
+                report = await inspect_guild(guild, active=True)
+        else:
+            report = await inspect_guild(guild, active=False)
+    except discord.Forbidden as exc:
+        raise ValueError("Discord refuse au bot la lecture des salons ou rôles de ce serveur.") from exc
+    except discord.HTTPException as exc:
+        raise ValueError(f"Discord n'a pas répondu correctement au diagnostic (HTTP {exc.status}).") from exc
+    except (OSError, asyncio.TimeoutError) as exc:
+        raise ValueError(f"Connexion Discord interrompue durant le diagnostic ({type(exc).__name__}).") from exc
+    return web.json_response(report)
 
 
 async def api_catalog(request):
@@ -1899,6 +1944,7 @@ def build_app():
     app.router.add_get("/api/catalog", api_catalog)
     app.router.add_post("/api/integrations/plan", api_integration_plan)
     app.router.add_post("/api/plan", api_plan)
+    app.router.add_post("/api/live-test", api_live_test)
     app.router.add_post("/api/preset", api_preset)
     app.router.add_post("/api/execute/{plan_id}", api_execute)
     app.router.add_get("/api/update/status", api_update_status)
