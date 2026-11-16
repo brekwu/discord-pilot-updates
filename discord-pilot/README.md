@@ -113,6 +113,14 @@ Choisis le rôle, un salon précis ou les derniers salons créés, puis pour cha
 
 Si le modèle Ollama retourne une liste vide, pose une question ou renvoie un format inexploitable après une tentative de réparation, Discord Pilot **n'invente aucune action**. Il affiche une fenêtre pour reformuler la demande, en conservant la phrase originale et en donnant des exemples d'actions prises en charge. L'utilisateur peut la modifier puis relancer la préparation. Une demande générale sur les accès des salons ouvre directement le sélecteur de permissions. Aucune action Discord ne part sans un brouillon valide puis une confirmation explicite.
 
+### P1 — Compréhension des consignes (v0.5.13)
+
+Le planificateur peut désormais combiner plusieurs commandes connues, par exemple « Crée un salon annonces et active les statistiques des messages », en un seul brouillon ordonné. Une sous-demande inconnue empêche la préparation automatique d'un plan partiel. Les actions restent strictement limitées aux capacités autorisées.
+
+Avec Ollama, Discord Pilot utilise un format de réponse JSON Schema lorsque la version locale le permet, puis revient au mode JSON simple si nécessaire. Il fournit au modèle une photographie bornée des salons, catégories et rôles du serveur connecté, ainsi que les dernières opérations enregistrées. Ce contexte permet de mieux comprendre les références comme « le dernier salon créé », sans garantir leur interprétation par tous les modèles. Aucune exécution Discord n'est accordée directement au modèle.
+
+Si une précision est nécessaire, la fenêtre garde la demande d'origine et propose un second champ pour répondre à la question. Cette réponse est conservée avec la demande pour la génération suivante. Les commandes incompatibles ou ambiguës restent non exécutées.
+
 Si aucune création de salon n'est enregistrée comme réussie, tu peux choisir les salons existants individuellement. Les permissions ne peuvent pas être choisies automatiquement sans connaître les règles d'accès souhaitées.
 
 ### Modules natifs locaux (v0.5.11)
