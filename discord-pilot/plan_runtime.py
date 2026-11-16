@@ -22,12 +22,12 @@ class PlanGuildView:
         self.default_role = guild.default_role
         def merged(original, new):
             return list({obj.id: obj for obj in [*original, *new]}.values())
-        self.channels = merged(guild.channels, created.get("channels", {}).values())
-        self.categories = merged(guild.categories, created.get("categories", {}).values())
-        self.roles = merged(guild.roles, created.get("roles", {}).values())
+        self.channels = merged(getattr(guild, "channels", []), created.get("channels", {}).values())
+        self.categories = merged(getattr(guild, "categories", []), created.get("categories", {}).values())
+        self.roles = merged(getattr(guild, "roles", []), created.get("roles", {}).values())
 
     def get_channel(self, ident):
-        return next((c for c in self.channels if c.id == ident), None) or self.guild.get_channel(ident)
+        return next((c for c in [*self.channels, *self.categories] if c.id == ident), None) or self.guild.get_channel(ident)
 
     def get_role(self, ident):
         return next((r for r in self.roles if r.id == ident), None) or self.guild.get_role(ident)

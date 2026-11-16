@@ -131,6 +131,14 @@ L'action `configure_module` permet de préparer les paramètres des **17 modules
 
 Les étapes d'un plan sont exécutées **dans l'ordre**. En cas d'échec, les suivantes sont marquées « Non exécuté » pour éviter une configuration incomplète. Les opérations idempotentes de permissions et de renommage peuvent être retentées **une seule fois** sur des erreurs HTTP transitoires ; jamais les suppressions, publications ou créations. Toutes les actions restent soumises à la confirmation du brouillon. Un modèle local Ollama doit être installé pour interpréter les configurations complexes qui ne correspondent pas aux commandes hors ligne reconnues.
 
+### P3 — Panneaux interactifs de tickets et candidatures (v0.5.15)
+
+Les actions `publish_ticket_panel` et `publish_application_panel` publient les panneaux Discord fonctionnels après configuration des modules correspondants. Exemple sans modèle IA : « Publie le panneau des tickets » crée un brouillon à confirmer. Lorsque le modèle prépare l'**activation** de tickets ou candidatures, Discord Pilot ajoute la publication correspondante au plan si elle était demandée, sans publier en arrière-plan. Une demande « sans publier » conserve la configuration sans panneau.
+
+Les boutons utilisent les gestionnaires natifs existants : création/archivage de tickets privés et soumission/validation de candidatures. Avant d'envoyer un panneau, le bot vérifie que le module est activé, que ses salons et rôles existent et que le salon de validation des candidatures est privé. Il recherche aussi un panneau déjà publié. Si ce message existe, aucune copie n'est envoyée ; s'il a réellement été supprimé, il peut être recréé. Si sa présence ne peut être vérifiée, l'opération échoue au lieu de produire des doublons.
+
+La recette automatisée teste la chaîne « créer catégorie et rôle → créer salon → configurer tickets → publier le panneau », les interactions simulées et le vrai exécutable Windows **hors connexion Discord**. Un test de bout en bout sur un serveur Discord réel et sur le modèle Ollama de ton PC reste indispensable ; aucun serveur réel n'a été modifié par cette recette.
+
 ### Modules natifs locaux (v0.5.11)
 
 **Correction v0.5.10 du planificateur IA :** accepte désormais certaines réponses JSON courantes d'Ollama (`plan`, `commands`, `result`, ou une action unique) tout en appliquant exactement la même liste d'actions autorisées. « Active les statistiques des messages » peut être traité localement sans dépendre d'Ollama. Si le modèle ne peut toujours pas produire un plan, l'application explique les opérations possibles et propose l'onglet Modules actifs pour les fonctions nécessitant des paramètres ; elle n'invente pas une action à exécuter.

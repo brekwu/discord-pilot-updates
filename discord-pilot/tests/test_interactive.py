@@ -396,6 +396,11 @@ class InteractionHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.STATE.state["ticket_panels"][GID]["channel_id"], TEXT)
             self.assertEqual(guild.channel.sent[-1][1]["view"].children[0].custom_id,
                              f"pilot:ticket:open:{GID}")
+            posted_before = len(guild.channel.sent)
+            repeat = await self.client.post(f"/api/interactive/{GID}/tickets/panel",
+                                            json={}, headers=self.headers)
+            self.assertEqual((await repeat.json())["status"], "skipped")
+            self.assertEqual(len(guild.channel.sent), posted_before)
             quiz = await self.client.post(f"/api/interactive/{GID}/quiz", json={
                 "channel_id": TEXT, "minutes": 2, "question": "Quel est ton rang ?",
                 "options": ["Gold", "Platinum", "Diamond"], "correct_index": 2}, headers=self.headers)
@@ -412,6 +417,11 @@ class InteractionHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.STATE.state["application_panels"][GID]["channel_id"], TEXT)
             self.assertEqual(guild.channel.sent[-1][1]["view"].children[0].custom_id,
                              f"pilot:application:open:{GID}")
+            posted_before = len(guild.channel.sent)
+            repeat = await self.client.post(f"/api/interactive/{GID}/applications/panel",
+                                            json={}, headers=self.headers)
+            self.assertEqual((await repeat.json())["status"], "skipped")
+            self.assertEqual(len(guild.channel.sent), posted_before)
 
 
 if __name__ == "__main__":

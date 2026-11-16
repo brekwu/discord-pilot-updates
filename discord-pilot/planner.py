@@ -20,6 +20,7 @@ ACTION_TYPES = {
     "set_module",
     "set_channel_role_access",
     "set_role_access", "configure_module",
+    "publish_ticket_panel", "publish_application_panel",
 }
 
 ACTION_LABELS = {
@@ -42,6 +43,8 @@ ACTION_LABELS = {
     "set_channel_role_access": "Définir les accès d'un rôle à un salon",
     "set_role_access": "Définir les accès d'un rôle à un salon nommé",
     "configure_module": "Configurer un module natif avec ses paramètres",
+    "publish_ticket_panel": "Publier le panneau des tickets",
+    "publish_application_panel": "Publier le panneau des candidatures",
 }
 
 DANGEROUS_ACTIONS = {"delete_channel", "delete_role"}
@@ -66,6 +69,8 @@ FIELDS = {
     "set_channel_role_access": ("channel_id", "role_id", "view", "participate"),
     "set_role_access": ("channel", "role", "view", "participate"),
     "configure_module": ("module", "enabled"),
+    "publish_ticket_panel": (),
+    "publish_application_panel": (),
 }
 
 OPTIONAL = {
@@ -110,6 +115,8 @@ MODEL_ACTION_ALIASES = {
     "setup_invites": "configure_invites", "suivi_invitations": "configure_invites",
     "configure_native_module": "configure_module", "setup_module": "configure_module",
     "configure_role_access": "set_role_access", "set_channel_permissions": "set_role_access",
+    "post_ticket_panel": "publish_ticket_panel", "setup_ticket_panel": "publish_ticket_panel",
+    "post_application_panel": "publish_application_panel", "setup_application_panel": "publish_application_panel",
 }
 
 MODEL_FIELD_ALIASES = {
@@ -339,6 +346,9 @@ Modules et paramètres : autorole(role_id), xp(channel_id facultatif), level_rew
 Si une valeur obligatoire n'est pas indiquée et que le contexte ne la contient pas explicitement, demande une précision ; ne devine jamais les cibles d'un module.
 set_role_access {type,channel,role,view,participate} (nom exact ou ID de salon/rôle ; view et participate parmi "allow", "deny", "inherit", "keep", mais pas deux "keep").
 N'utilise set_role_access que si l'utilisateur demande explicitement un changement précis de visibilité ou participation pour un rôle sur un salon ciblé. Ne devine ni les droits ni les rôles.
+publish_ticket_panel {type} (uniquement après activation et paramétrage complet de tickets ; publie un bouton dans le salon configuré ; ne duplique pas un panneau encore actif).
+publish_application_panel {type} (uniquement après activation et paramétrage complet de applications ; publie un bouton dans le salon configuré ; ne duplique pas un panneau encore actif).
+Lorsque l'utilisateur demande d'ACTIVER des tickets ou des candidatures prêts à l'emploi, propose configure_module puis publish_ticket_panel ou publish_application_panel dans cet ordre, pour qu'il puisse valider l'ensemble.
 rename_channel {type,name,new_name}
 rename_role {type,name,new_name}
 set_topic {type,name,topic}
@@ -683,6 +693,8 @@ def description(item: dict[str, str]) -> str:
                            if k not in {"type", "module", "enabled"})
         return (f"{'Activer' if item['enabled'] == 'true' else 'Désactiver'} "
                 f"{MODULES[item['module']]['title']}" + (f" ({values})" if values else ""))
+    if item["type"] in {"publish_ticket_panel", "publish_application_panel"}:
+        return f"{label} dans son salon configuré (publication visible aux membres)"
     if item["type"] == "suggest_integration":
         return f"{label} : {PROVIDERS[item['provider']]['name']} (validation Discord obligatoire)"
     if item["type"].startswith("configure_"):

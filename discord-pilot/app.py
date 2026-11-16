@@ -31,6 +31,9 @@ from community_modules import (MODULES, SpamTracker, normalize_module,
                                paris_slot, public_modules, should_filter)
 from community_support import parse_dm_target, parse_staff_reply, staff_allowed, validate_application
 from integration_catalog import PROVIDERS, catalog, recommended_providers
+from panel_actions import publish_panel
+from panel_planning import (complete_panel_plan, direct_panel_plan,
+                            publication_requested)
 from plan_runtime import (direct_permission_plan, explicit_permission_intent,
                           permission_action_is_authorized, set_module_config)
 from planner import (DANGEROUS_ACTIONS, MODEL_PLAN_SCHEMA, PRESETS, SYSTEM_PROMPT, description,
@@ -1329,23 +1332,8 @@ async def api_ticket_panel(request):
     guild = MANAGER.get_guild(guild_id)
     if not guild:
         raise ValueError("Connecte le bot au serveur pour publier des tickets.")
-    cfg = STATE.module(guild_id, "tickets")
-    if not cfg.get("enabled"):
-        raise ValueError("Active et configure le module Tickets privés avant de publier le panneau.")
-    channel = guild.get_channel(int(cfg["panel_channel_id"]))
-    if not isinstance(channel, discord.TextChannel):
-        raise ValueError("Le salon du panneau n'existe plus.")
-    view = discord.ui.View(timeout=None)
-    view.add_item(discord.ui.Button(label="Ouvrir un ticket", style=discord.ButtonStyle.primary,
-                                    custom_id=f"pilot:ticket:open:{guild_id}", emoji="🎟️"))
-    try:
-        panel = await channel.send("🎟️ **Besoin d'aide ?** Clique ci-dessous pour ouvrir un ticket privé.",
-                                   view=view, allowed_mentions=discord.AllowedMentions.none())
-    except (discord.Forbidden, discord.HTTPException) as exc:
-        raise ValueError(f"Impossible de publier le panneau : {type(exc).__name__}.") from exc
-    STATE.state["ticket_panels"][guild_id] = {"channel_id": str(channel.id), "message_id": str(panel.id)}
-    STATE.save()
-    return web.json_response({"ok": True, "panel": STATE.state["ticket_panels"][guild_id]})
+    status, detail, panel = await publish_panel(guild, STATE, "tickets")
+    return web.json_response({"ok": True, "status": status, "detail": detail, "panel": panel})
 
 
 async def api_application_panel(request):
@@ -1353,27 +1341,8 @@ async def api_application_panel(request):
     guild = MANAGER.get_guild(guild_id)
     if not guild:
         raise ValueError("Connecte le bot au serveur avant de publier un formulaire.")
-    cfg = STATE.module(guild_id, "applications")
-    if not cfg.get("enabled"):
-        raise ValueError("Active le module Candidatures et configure ses salons avant de publier.")
-    channel = guild.get_channel(int(cfg["panel_channel_id"]))
-    review_channel = guild.get_channel(int(cfg["staff_channel_id"]))
-    if (not isinstance(channel, discord.TextChannel) or
-            not isinstance(review_channel, discord.TextChannel) or
-            review_channel.permissions_for(guild.default_role).view_channel):
-        raise ValueError("Vérifie le salon public et le salon privé de validation.")
-    view = discord.ui.View(timeout=None)
-    view.add_item(discord.ui.Button(label="Déposer ma candidature", style=discord.ButtonStyle.primary,
-                                    custom_id=f"pilot:application:open:{guild_id}", emoji="📝"))
-    try:
-        message = await channel.send("📝 **Candidatures ouvertes** — clique sur le bouton pour remplir le formulaire.",
-                                     view=view, allowed_mentions=discord.AllowedMentions.none())
-    except (discord.Forbidden, discord.HTTPException) as exc:
-        raise ValueError(f"Publication impossible : {type(exc).__name__}.") from exc
-    STATE.state["application_panels"][guild_id] = {"channel_id": str(channel.id),
-                                                   "message_id": str(message.id)}
-    STATE.save()
-    return web.json_response({"ok": True, "panel": STATE.state["application_panels"][guild_id]})
+    status, detail, panel = await publish_panel(guild, STATE, "applications")
+    return web.json_response({"ok": True, "status": status, "detail": detail, "panel": panel})
 
 
 async def api_interactive_create(request):
@@ -1590,6 +1559,7 @@ def supported_local_plan(prompt: str) -> list[dict]:
     for clause in clauses:
         providers = recommended_providers(clause)
         parsed = (community_automation_plan(clause)
+                  or direct_panel_plan(clause)
                   or direct_permission_plan(clause)
                   or native_module_plan(clause)
                   or ([{"type": "suggest_integration", "provider": name} for name in providers]
@@ -1600,7 +1570,7 @@ def supported_local_plan(prompt: str) -> list[dict]:
         actions.extend(parsed)
         if len(actions) > 40:
             return []
-    return validate_actions(actions)
+    return complete_panel_plan(prompt, validate_actions(actions))
 
 
 def planning_context(guild_id: str) -> dict:
@@ -1691,7 +1661,8 @@ async def ollama_plan(prompt: str, model: str, context: dict | None = None) -> t
                  "create_category, create_text_channel, create_voice_channel, create_role, "
                  "rename_channel, rename_role, set_topic, send_message, make_private, "
                  "delete_channel, delete_role, configure_welcome, configure_farewell, "
-                 "configure_invites, set_module, configure_module, set_role_access. Exemple : "
+                 "configure_invites, set_module, configure_module, set_role_access, "
+                 "publish_ticket_panel, publish_application_panel. Exemple : "
                  "{\"actions\":[{\"type\":\"create_text_channel\",\"name\":\"annonces\"}]}. "
                  "Conserve exactement la demande d'origine. "
                  "N'invente aucune action supplémentaire ou droit sensible. "
@@ -1708,8 +1679,8 @@ def plan_clarification(prompt: str, model_question: str | None = None) -> dict:
                     "Configure les permissions des salons"]
         question = "Quel salon ou rôle veux-tu modifier, et quel changement précis faut-il faire ?"
     elif re.search(r"\b(?:tickets?|recompenses?|candidatures?|sondages?|moderation|xp)\b", requested):
-        examples = ["Active le module XP", "Crée un salon tickets",
-                    "Configure les permissions des salons"]
+        examples = ["Active le module XP", "Publie le panneau des tickets",
+                    "Publie le formulaire des candidatures"]
         question = "Souhaites-tu créer des salons, activer un module ou régler ses options dans « Modules actifs » ?"
     else:
         examples = ["Crée un salon annonces", "Crée un rôle Membre",
@@ -1754,6 +1725,11 @@ async def api_plan(request):
                 raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
     if not actions:
         return web.json_response(plan_clarification(prompt, model_question))
+    actions = complete_panel_plan(prompt, actions)
+    if any(a["type"] in {"publish_ticket_panel", "publish_application_panel"} and
+           not publication_requested(prompt, "tickets" if a["type"] == "publish_ticket_panel" else "applications")
+           for a in actions):
+        raise ValueError("L'IA ne peut pas publier un panneau interactif sans demande explicite de l'utilisateur.")
     if any(action["type"] == "set_channel_role_access" for action in actions):
         raise ValueError("Les permissions des salons se configurent dans « Gérer les rôles et accès des salons » : "
                          "les salons, le rôle et les droits doivent être choisis explicitement.")
@@ -1813,6 +1789,11 @@ async def run_plan(plan, guild):
                                "description": description(item)}
                     elif item["type"] in {"set_module", "configure_module"}:
                         status, detail = set_module_config(STATE, guild, item, created)
+                        row = {"index": index, "status": status, "detail": detail,
+                               "description": description(item)}
+                    elif item["type"] in {"publish_ticket_panel", "publish_application_panel"}:
+                        module = "tickets" if item["type"] == "publish_ticket_panel" else "applications"
+                        status, detail, _panel = await publish_panel(guild, STATE, module, created)
                         row = {"index": index, "status": status, "detail": detail,
                                "description": description(item)}
                     else:
