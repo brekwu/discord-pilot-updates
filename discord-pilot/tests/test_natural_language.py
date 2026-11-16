@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from aiohttp.test_utils import TestClient, TestServer
 
 import app
-from planner import (collapse_old_clarifications, default_creation_plan,
+from planner import (MODEL_PLAN_SCHEMA, collapse_old_clarifications, default_creation_plan,
                      channel_role_configuration_request, local_parse,
                      missing_information, parse_ollama_decision, validate_actions)
 from storage import State
@@ -103,6 +103,21 @@ class LocalLanguageTests(unittest.TestCase):
         self.assertEqual(collapse_old_clarifications("Crée un salon\nPrécision : annonces"),
                          "Crée un salon annonces")
 
+    def test_complex_clarification_is_preserved_for_the_model(self):
+        self.assertEqual(collapse_old_clarifications("Réorganise le serveur\nPrécision : les salons d'annonces"),
+                         "Réorganise le serveur\nPrécision : les salons d'annonces")
+
+    def test_composed_commands_are_complete_and_ordered(self):
+        self.assertEqual(app.supported_local_plan("Crée un salon annonces et active les statistiques des messages"), [
+            {"type": "create_text_channel", "name": "annonces"},
+            {"type": "set_module", "module": "activity_stats", "enabled": "true"},
+        ])
+        self.assertEqual(app.supported_local_plan("Crée un salon annonces puis crée un rôle Membre"), [
+            {"type": "create_text_channel", "name": "annonces"},
+            {"type": "create_role", "name": "Membre"},
+        ])
+        self.assertEqual(app.supported_local_plan("Crée un salon annonces et programme une campagne"), [])
+
     def test_local_model_can_ask_a_question(self):
         actions, question = parse_ollama_decision('{"actions":[],"question":"Quel salon veux-tu créer ?"}')
         self.assertEqual(actions, [])
@@ -182,8 +197,9 @@ class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
         class FakeResponse:
             status = 200
 
-            def __init__(self, answer):
+            def __init__(self, answer, status=200):
                 self.answer = answer
+                self.status = status
 
             async def __aenter__(self):
                 return self
@@ -207,7 +223,8 @@ class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
 
             def post(self, _url, json):
                 self.calls.append(json)
-                return FakeResponse(self.answers.pop(0))
+                answer = self.answers.pop(0)
+                return FakeResponse(*answer) if isinstance(answer, tuple) else FakeResponse(answer)
 
         first = '{"actions":[{"type":"create_forum_channel","name":"bienvenue"}]}'
         repaired = '{"actions":[{"type":"create_text_channel","name":"bienvenue"}]}'
@@ -218,6 +235,15 @@ class OllamaRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(question)
         self.assertEqual(len(fake.calls), 2)
         self.assertIn("create_text_channel", fake.calls[1]["messages"][-1]["content"])
+        self.assertEqual(fake.calls[0]["format"], MODEL_PLAN_SCHEMA)
+
+        schema_fallback = FakeSession([("", 400), repaired])
+        with patch.object(app.aiohttp, "ClientSession", return_value=schema_fallback):
+            result, _ = await app.ollama_plan("Crée un salon bienvenue", "qwen-test",
+                                              {"connected": False, "recent_plans": []})
+        self.assertEqual(result, [{"type": "create_text_channel", "name": "bienvenue"}])
+        self.assertEqual(schema_fallback.calls[1]["format"], "json")
+        self.assertIn("recent_plans", schema_fallback.calls[0]["messages"][1]["content"])
 
         no_actions = FakeSession(['{"actions":[]}', repaired])
         with patch.object(app.aiohttp, "ClientSession", return_value=no_actions):
@@ -308,6 +334,19 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await local_res.json())["needs_clarification"])
         self.assertEqual(app.STATE.history(original["guild_id"]), [])
 
+    async def test_recent_plan_context_contains_server_facts_not_secrets(self):
+        gid = "1567347687379050727"
+        p = app.STATE.add(gid, "Crée un salon annonces", [{"type": "create_text_channel", "name": "annonces"}], "local")
+        p["status"] = "completed"
+        p["results"] = [{"index": 0, "status": "done", "detail": "Salon créé (ID 223456789012345678)."}]
+        with patch.object(app.MANAGER, "get_guild", return_value=None):
+            context = app.planning_context(gid)
+        self.assertFalse(context["connected"])
+        self.assertEqual(context["recent_plans"][0]["actions"],
+                         [{"type": "create_text_channel", "name": "annonces"}])
+        self.assertIn("223456789012345678", context["recent_plans"][0]["completed_results"][0]["detail"])
+        self.assertNotIn("token", str(context).lower())
+
     async def test_local_explicit_request_creates_draft(self):
         res = await self.client.post("/api/plan", json={"guild_id": "1567347687379050727",
                                                         "mode": "local", "prompt": "Rajoute un channel annonces"}, headers=self.headers)
@@ -315,6 +354,35 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         body = await res.json()
         self.assertEqual(body["plan"]["status"], "draft")
         self.assertEqual(body["plan"]["actions"], [{"type": "create_text_channel", "name": "annonces"}])
+
+    async def test_multi_action_request_includes_all_supported_tasks(self):
+        with patch.object(app, "ollama_models", new=AsyncMock(side_effect=AssertionError("no model needed"))):
+            res = await self.client.post("/api/plan", json={
+                "guild_id": "1567347687379050727", "mode": "auto",
+                "prompt": "Crée un salon annonces et active les statistiques des messages",
+            }, headers=self.headers)
+        self.assertEqual(res.status, 200)
+        body = await res.json()
+        self.assertEqual(body["plan"]["actions"], [
+            {"type": "create_text_channel", "name": "annonces"},
+            {"type": "set_module", "module": "activity_stats", "enabled": "true"},
+        ])
+
+    async def test_model_receives_recent_server_context_for_followups(self):
+        gid = "1567347687379050727"
+        previous = app.STATE.add(gid, "Crée un salon annonces", [
+            {"type": "create_text_channel", "name": "annonces"}], "local")
+        previous["status"] = "completed"
+        mock = AsyncMock(return_value=([{"type": "set_topic", "name": "annonces", "topic": "Infos"}], None))
+        with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
+             patch.object(app, "ollama_plan", new=mock), \
+             patch.object(app.MANAGER, "get_guild", return_value=None):
+            res = await self.client.post("/api/plan", json={"guild_id": gid, "mode": "auto",
+                "prompt": "Change la description du dernier salon en Infos"}, headers=self.headers)
+        self.assertEqual(res.status, 200)
+        self.assertEqual(mock.await_args.args[2]["recent_plans"][0]["actions"],
+                         [{"type": "create_text_channel", "name": "annonces"}])
+        self.assertEqual((await res.json())["plan"]["status"], "draft")
 
     async def test_conversational_request_skips_model_and_creates_both_channels(self):
         with patch.object(app, "ollama_models", new=AsyncMock(side_effect=AssertionError("not needed"))):
