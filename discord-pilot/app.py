@@ -31,6 +31,8 @@ from community_modules import (MODULES, SpamTracker, normalize_module,
                                paris_slot, public_modules, should_filter)
 from community_support import parse_dm_target, parse_staff_reply, staff_allowed, validate_application
 from integration_catalog import PROVIDERS, catalog, recommended_providers
+from plan_runtime import (direct_permission_plan, explicit_permission_intent,
+                          permission_action_is_authorized, set_module_config)
 from planner import (DANGEROUS_ACTIONS, MODEL_PLAN_SCHEMA, PRESETS, SYSTEM_PROMPT, description,
                      channel_role_configuration_request, collapse_old_clarifications, community_automation_plan,
                      default_creation_plan, local_parse,
@@ -1588,6 +1590,7 @@ def supported_local_plan(prompt: str) -> list[dict]:
     for clause in clauses:
         providers = recommended_providers(clause)
         parsed = (community_automation_plan(clause)
+                  or direct_permission_plan(clause)
                   or native_module_plan(clause)
                   or ([{"type": "suggest_integration", "provider": name} for name in providers]
                       if providers else [])
@@ -1688,7 +1691,7 @@ async def ollama_plan(prompt: str, model: str, context: dict | None = None) -> t
                  "create_category, create_text_channel, create_voice_channel, create_role, "
                  "rename_channel, rename_role, set_topic, send_message, make_private, "
                  "delete_channel, delete_role, configure_welcome, configure_farewell, "
-                 "configure_invites, set_module. Exemple : "
+                 "configure_invites, set_module, configure_module, set_role_access. Exemple : "
                  "{\"actions\":[{\"type\":\"create_text_channel\",\"name\":\"annonces\"}]}. "
                  "Conserve exactement la demande d'origine. "
                  "N'invente aucune action supplémentaire ou droit sensible. "
@@ -1727,7 +1730,7 @@ async def api_plan(request):
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
         raise ValueError("Mode d'interprétation inconnu.")
-    if channel_role_configuration_request(prompt):
+    if channel_role_configuration_request(prompt) and not explicit_permission_intent(prompt):
         return web.json_response({"configuration_required": "channel_role_access",
                                   "message": "Choisis les salons, le rôle et les accès à autoriser/refuser. "
                                              "Aucune permission n'est modifiée sans validation."})
@@ -1754,6 +1757,10 @@ async def api_plan(request):
     if any(action["type"] == "set_channel_role_access" for action in actions):
         raise ValueError("Les permissions des salons se configurent dans « Gérer les rôles et accès des salons » : "
                          "les salons, le rôle et les droits doivent être choisis explicitement.")
+    if any(action["type"] == "set_role_access" and not permission_action_is_authorized(prompt, action)
+           for action in actions):
+        raise ValueError("Permissions non justifiées par la demande : indique explicitement le rôle, "
+                         "le salon et les droits à autoriser ou refuser. Aucun accès n'a été changé.")
     if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used)
@@ -1792,45 +1799,62 @@ async def run_plan(plan, guild):
     async with LOCKS.setdefault(plan["guild_id"], asyncio.Lock()):
         plan["status"] = "running"
         STATE.save()
+        created = {"channels": {}, "roles": {}, "categories": {}}
         for index, item in enumerate(plan["actions"]):
-            try:
-                if item["type"] == "suggest_integration":
-                    provider = PROVIDERS[item["provider"]]
-                    row = {"index": index, "status": "authorization_required",
-                           "detail": ("Non installé. Ouvre le site officiel, sélectionne ton serveur et "
-                                      "autorise l'application dans Discord. La configuration tierce "
-                                      "peut ensuite nécessiter son tableau de bord."),
-                           "authorization_url": provider["url"],
+            for attempt in range(2):
+                try:
+                    if item["type"] == "suggest_integration":
+                        provider = PROVIDERS[item["provider"]]
+                        row = {"index": index, "status": "authorization_required",
+                               "detail": ("Non installé. Ouvre le site officiel, sélectionne ton serveur et "
+                                          "autorise l'application dans Discord. La configuration tierce "
+                                          "peut ensuite nécessiter son tableau de bord."),
+                               "authorization_url": provider["url"],
+                               "description": description(item)}
+                    elif item["type"] in {"set_module", "configure_module"}:
+                        status, detail = set_module_config(STATE, guild, item, created)
+                        row = {"index": index, "status": status, "detail": detail,
+                               "description": description(item)}
+                    else:
+                        status, detail = await execute_action(guild, item, state=STATE, created=created)
+                        row = {"index": index, "status": status, "detail": detail,
+                               "description": description(item)}
+                except discord.Forbidden:
+                    row = {"index": index, "status": "failed", "detail": "Permissions Discord insuffisantes pour cette action.",
                            "description": description(item)}
-                elif item["type"] == "set_module":
-                    previous = STATE.module(plan["guild_id"], item["module"])
-                    config = normalize_module(item["module"],
-                                              {**previous, "enabled": item["enabled"] == "true"}, guild)
-                    STATE.set_module(plan["guild_id"], item["module"], config)
-                    row = {"index": index, "status": "done", "detail": "Module configuré (actif uniquement bot connecté et permissions accordées).",
+                except discord.HTTPException as exc:
+                    # Retry only idempotent operations on transient server responses.
+                    # Never repeat a creation, deletion or message publication.
+                    retryable = {"set_role_access", "set_channel_role_access", "rename_channel",
+                                 "rename_role", "set_topic"}
+                    if attempt == 0 and exc.status in {429, 502, 503, 504} and item["type"] in retryable:
+                        await asyncio.sleep(0.8)
+                        continue
+                    row = {"index": index, "status": "failed", "detail": f"Discord a refusé l'action (HTTP {exc.status}).",
                            "description": description(item)}
-                else:
-                    status, detail = await execute_action(guild, item, state=STATE)
-                    row = {"index": index, "status": status, "detail": detail,
+                except (ValueError, TypeError, AttributeError) as exc:
+                    row = {"index": index, "status": "failed", "detail": str(exc),
                            "description": description(item)}
-            except discord.Forbidden:
-                row = {"index": index, "status": "failed", "detail": "Permissions Discord insuffisantes pour cette action.",
-                       "description": description(item)}
-            except discord.HTTPException as exc:
-                row = {"index": index, "status": "failed", "detail": f"Discord a refusé l'action (HTTP {exc.status}).",
-                       "description": description(item)}
-            except (ValueError, TypeError, AttributeError) as exc:
-                row = {"index": index, "status": "failed", "detail": str(exc),
-                       "description": description(item)}
-            except Exception as exc:
-                row = {"index": index, "status": "failed", "detail": f"Erreur inattendue : {type(exc).__name__}.",
-                       "description": description(item)}
+                except Exception as exc:
+                    row = {"index": index, "status": "failed", "detail": f"Erreur inattendue : {type(exc).__name__}.",
+                           "description": description(item)}
+                break
             plan["results"].append(row)
             STATE.save()
+            if row["status"] == "failed":
+                # Later steps may depend on a role or channel that was not
+                # created. Explicitly mark them blocked; never silently run.
+                for next_index, pending in enumerate(plan["actions"][index + 1:], index + 1):
+                    plan["results"].append({"index": next_index, "status": "blocked",
+                                            "detail": "Non exécuté : une action précédente a échoué.",
+                                            "description": description(pending)})
+                STATE.save()
+                break
         failures = sum(1 for r in plan["results"] if r["status"] == "failed")
+        successes = sum(1 for r in plan["results"] if r["status"] in {"done", "skipped"})
         approvals = sum(1 for r in plan["results"] if r["status"] == "authorization_required")
-        plan["status"] = ("failed" if failures == len(plan["results"]) else
-                          "partial" if failures else
+        plan["status"] = ("partial" if failures and (successes or approvals) else
+                          "failed" if failures else
                           "authorization_required" if approvals else "completed")
         STATE.save()
         if any(a["type"].startswith("configure_") or a["type"] == "set_module" for a in plan["actions"]):

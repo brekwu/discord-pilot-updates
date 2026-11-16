@@ -19,6 +19,7 @@ ACTION_TYPES = {
     "suggest_integration",
     "set_module",
     "set_channel_role_access",
+    "set_role_access", "configure_module",
 }
 
 ACTION_LABELS = {
@@ -39,6 +40,8 @@ ACTION_LABELS = {
     "suggest_integration": "Préparer l'autorisation du bot externe",
     "set_module": "Activer ou désactiver un module local",
     "set_channel_role_access": "Définir les accès d'un rôle à un salon",
+    "set_role_access": "Définir les accès d'un rôle à un salon nommé",
+    "configure_module": "Configurer un module natif avec ses paramètres",
 }
 
 DANGEROUS_ACTIONS = {"delete_channel", "delete_role"}
@@ -61,12 +64,15 @@ FIELDS = {
     "suggest_integration": ("provider",),
     "set_module": ("module", "enabled"),
     "set_channel_role_access": ("channel_id", "role_id", "view", "participate"),
+    "set_role_access": ("channel", "role", "view", "participate"),
+    "configure_module": ("module", "enabled"),
 }
 
 OPTIONAL = {
     "create_text_channel": ("category", "topic"),
     "create_voice_channel": ("category",),
     "create_role": ("color",),
+    "configure_module": tuple(dict.fromkeys(field[0] for spec in MODULES.values() for field in spec["fields"])),
 }
 
 # Small local models frequently understand the request correctly but use a
@@ -102,6 +108,8 @@ MODEL_ACTION_ALIASES = {
     "set_goodbye": "configure_farewell", "configurer_depart": "configure_farewell",
     "invite_tracker": "configure_invites", "track_invites": "configure_invites",
     "setup_invites": "configure_invites", "suivi_invitations": "configure_invites",
+    "configure_native_module": "configure_module", "setup_module": "configure_module",
+    "configure_role_access": "set_role_access", "set_channel_permissions": "set_role_access",
 }
 
 MODEL_FIELD_ALIASES = {
@@ -169,8 +177,17 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
         if kind == "set_module" and (fields["module"] not in {"xp", "antispam", "antilinks", "activity_stats"}
                                      or fields["enabled"] not in {"true", "false"}):
             raise ValueError("Ce module ne peut pas être piloté sans paramètres. Ouvre l'onglet Modules actifs.")
-        if kind == "set_channel_role_access":
-            if not all(re.fullmatch(r"[0-9]{17,20}", fields[key]) for key in ("channel_id", "role_id")):
+        if kind == "configure_module":
+            module = fields["module"]
+            if module not in MODULES:
+                raise ValueError("Ce module natif est inconnu.")
+            permitted = {field[0] for field in MODULES[module]["fields"]}
+            if set(fields) - {"module", "enabled"} - permitted:
+                raise ValueError("Paramètre incompatible avec le module choisi.")
+            if fields["enabled"] not in {"true", "false"}:
+                raise ValueError("Le statut du module doit être true ou false.")
+        if kind in {"set_channel_role_access", "set_role_access"}:
+            if kind == "set_channel_role_access" and not all(re.fullmatch(r"[0-9]{17,20}", fields[key]) for key in ("channel_id", "role_id")):
                 raise ValueError("Sélectionne un salon et un rôle existants par leurs identifiants Discord.")
             choices = {"allow", "deny", "inherit", "keep"}
             if (fields["view"] not in choices or fields["participate"] not in choices
@@ -178,8 +195,12 @@ def validate_actions(value: Any) -> list[dict[str, str]]:
                 raise ValueError("Choisis au moins une permission à modifier (autoriser, refuser ou héritage).")
         if kind == "send_message" and len(fields["content"]) > 1800:
             raise ValueError("Le message dépasse la limite de 1 800 caractères.")
-        if kind != "send_message" and any(len(v) > 900 for v in fields.values()):
+        if kind == "configure_module" and any(len(v) > 1800 for v in fields.values()):
+            raise ValueError("Paramètre de module trop long.")
+        if kind not in {"send_message", "configure_module"} and any(len(v) > 900 for v in fields.values()):
             raise ValueError("Valeur trop longue.")
+        if kind == "set_role_access" and any(len(fields[key]) > 100 for key in ("channel", "role")):
+            raise ValueError("Les noms de salon et de rôle sont limités à 100 caractères.")
         if "name" in fields and len(fields["name"]) > 100:
             raise ValueError("Nom limité à 100 caractères.")
         if "new_name" in fields and len(fields["new_name"]) > 100:
@@ -217,10 +238,12 @@ def normalize_model_actions(value: Any) -> list[dict[str, str]]:
             key = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key).lower()
             if key == "category_name" and kind in {"create_text_channel", "create_voice_channel"}:
                 canonical = "category"
-            elif key == "role_name" and kind == "make_private":
+            elif key == "role_name" and kind in {"make_private", "set_role_access"}:
                 canonical = "role"
-            elif key == "channel_name" and kind == "send_message":
+            elif key == "channel_name" and kind in {"send_message", "set_role_access"}:
                 canonical = "channel"
+            elif kind == "configure_module" and key in OPTIONAL["configure_module"]:
+                canonical = key
             else:
                 canonical = MODEL_FIELD_ALIASES.get(key, key)
             if canonical in fields and fields[canonical] != value:
@@ -311,6 +334,11 @@ configure_welcome {type,channel} (envoie un message lorsqu'un membre rejoint)
 configure_farewell {type,channel} (envoie un message lorsqu'un membre quitte)
 configure_invites {type,channel} (annonce chaque invitation attribuable et son compteur)
 set_module {type,module,enabled} (module: xp, antispam, antilinks ou activity_stats uniquement ; enabled: "true" ou "false")
+configure_module {type,module,enabled,...paramètres} (module : un des 17 identifiants de modules natifs ; enabled : "true" ou "false" ; paramètres par nom de salon/rôle existant ou ID, suivant la liste ci-dessous)
+Modules et paramètres : autorole(role_id), xp(channel_id facultatif), level_rewards(level,role_id), invite_rewards(invites,role_id), activity_stats(aucun), warnings(channel_id privé), antispam(aucun), antilinks(aucun), wordfilter(words séparés par virgules), audit(channel_id privé), suggestions(channel_id), voice_rooms(lobby_id vocal), reaction_role(message_id,emoji,role_id), daily_post(channel_id,hour HH:MM,message), tickets(panel_channel_id,category_id,staff_role_id facultatif), modmail(staff_channel_id privé,staff_role_id facultatif), applications(panel_channel_id,staff_channel_id privé,staff_role_id facultatif).
+Si une valeur obligatoire n'est pas indiquée et que le contexte ne la contient pas explicitement, demande une précision ; ne devine jamais les cibles d'un module.
+set_role_access {type,channel,role,view,participate} (nom exact ou ID de salon/rôle ; view et participate parmi "allow", "deny", "inherit", "keep", mais pas deux "keep").
+N'utilise set_role_access que si l'utilisateur demande explicitement un changement précis de visibilité ou participation pour un rôle sur un salon ciblé. Ne devine ni les droits ni les rôles.
 rename_channel {type,name,new_name}
 rename_role {type,name,new_name}
 set_topic {type,name,topic}
@@ -318,11 +346,11 @@ send_message {type,channel,content} (message explicite uniquement)
 make_private {type,name,role} (role existant ou à créer; aucun accès pour @everyone)
 delete_channel {type,name} (uniquement si demandé explicitement)
 delete_role {type,name} (uniquement si demandé explicitement)
-Pour les catégories, crée-les avant les salons. Utilise un plan précis, 40 actions maximum.
+Pour les catégories, crée-les avant les salons ; crée les rôles avant les actions qui les utilisent. Utilise un plan précis, 40 actions maximum.
 Exemple : demande « Crée un salon annonces et un rôle Membre » ->
 {"actions":[{"type":"create_text_channel","name":"annonces"},{"type":"create_role","name":"Membre"}]}.
 Ne confonds pas activation d'une fonctionnalité avancée et création d'un salon.
-Les modules à paramètres (récompenses, avertissements, tickets, candidatures) se règlent dans l'onglet Modules actifs.
+Pour une configuration de module nécessitant un salon ou un rôle privé, le salon doit déjà être privé pour @everyone ou être rendu privé explicitement avant l'action.
 Ne crée jamais de rôle Administrateur avec des permissions dangereuses et n'ajoute aucun droit d'administrateur.
 Si aucune action concrète sûre n'est possible, réponds {"actions":[]}.
 Ne propose aucune action implicite en dehors de la demande. Évite les doublons.
@@ -345,7 +373,8 @@ MODEL_PLAN_SCHEMA = {
                         "set_channel_role_access", "suggest_integration"})},
                     **{field: {"type": "string"} for field in (
                         "name", "new_name", "category", "topic", "channel", "role",
-                        "content", "color", "module", "enabled")},
+                        "content", "color", "module", "enabled", "view", "participate",
+                        *OPTIONAL["configure_module"])},
                 },
                 "required": ["type"], "additionalProperties": False,
             },
@@ -646,6 +675,14 @@ def description(item: dict[str, str]) -> str:
     if item["type"] == "set_channel_role_access":
         return (f"Accès du rôle {item['role_id']} au salon {item['channel_id']} : "
                 f"voir={item['view']}, écrire/rejoindre={item['participate']}")
+    if item["type"] == "set_role_access":
+        return (f"Accès de @{item['role']} à #{item['channel']} : "
+                f"voir={item['view']}, écrire/rejoindre={item['participate']}")
+    if item["type"] == "configure_module":
+        values = ", ".join(f"{k}={v[:70]}" for k, v in item.items()
+                           if k not in {"type", "module", "enabled"})
+        return (f"{'Activer' if item['enabled'] == 'true' else 'Désactiver'} "
+                f"{MODULES[item['module']]['title']}" + (f" ({values})" if values else ""))
     if item["type"] == "suggest_integration":
         return f"{label} : {PROVIDERS[item['provider']]['name']} (validation Discord obligatoire)"
     if item["type"].startswith("configure_"):
