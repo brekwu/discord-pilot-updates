@@ -758,12 +758,18 @@ async function createPlan() {
       modal({title: "Préciser la demande", description: data.question || "Quel changement précis veux-tu faire ?",
         fields: [
           {type: "info", text: `Aucune modification effectuée. Exemples : ${examples}`},
-          {id: "instruction", type: "textarea", label: "Reformule ta demande", value: prompt,
-           placeholder: "Décris une action précise, par exemple « Crée un salon annonces »"}
-        ], confirmText: "Préparer ce plan", onConfirm: async ({instruction}) => {
+          {id: "instruction", type: "textarea", label: "Demande d'origine (modifiable)", value: prompt,
+           placeholder: "Par exemple « Crée un salon annonces »"},
+          {id: "detail", type: "textarea", label: "Réponse ou précision supplémentaire (facultative)",
+           placeholder: "Par exemple « le rôle Membre, uniquement sur #annonces »"}
+        ], confirmText: "Préparer ce plan", onConfirm: async ({instruction, detail}) => {
           const revised = instruction.trim();
-          if (revised.length < 3 || revised === prompt) throw new Error("Modifie la demande en précisant l'action à effectuer.");
-          $("requestText").value = revised;
+          const extra = (detail || "").trim();
+          if (revised.length < 3 || (revised === prompt && !extra))
+            throw new Error("Reformule la demande ou réponds à la question de l'IA.");
+          const full = extra ? `${revised}\nPrécision : ${extra}` : revised;
+          if (full.length > 8000) throw new Error("Ta demande dépasse 8 000 caractères.");
+          $("requestText").value = full;
           setTimeout(() => createPlan(), 0);
         }});
       return;
