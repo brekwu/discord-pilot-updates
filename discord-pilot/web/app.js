@@ -770,7 +770,7 @@ function testDiscord() {
   if (!app.selected) return toast("Sélectionne un serveur Discord.", true);
   modal({title: "Tester ton bot sur Discord", description: "Le test utilise la connexion réelle du bot dans ton application Windows. Il ne peut pas être effectué avec un bot déconnecté.",
     fields: [
-      {id: "mode", type: "select", label: "Type de test", options: [
+      {id: "mode", type: "select", label: "Type de test", value: "read_only", options: [
         {value: "read_only", label: "Lecture réelle des salons et rôles (aucune modification)"},
         {value: "active", label: "Test complet : salon privé temporaire, message, lecture puis suppression"}
       ]},
