@@ -751,6 +751,37 @@ function settings() {
   }
 }
 
+function renderLiveTest(report) {
+  const status = $("liveTestResults");
+  status.hidden = false;
+  const title = report.status === "verified" ? "✓ Vérifications réussies sur Discord" :
+                report.status === "warning" ? "⚠ Vérifications avec avertissements" :
+                "✕ Vérifications incomplètes sur Discord";
+  const header = dom("strong", "", title);
+  const list = dom("ul", "");
+  (report.checks || []).forEach(check => {
+    const li = dom("li", "", `${check.ok ? "✓" : "✕"} ${check.name} — ${check.detail}`);
+    list.append(li);
+  });
+  replace(status, [header, list]);
+}
+
+function testDiscord() {
+  if (!app.selected) return toast("Sélectionne un serveur Discord.", true);
+  modal({title: "Tester ton bot sur Discord", description: "Le test utilise la connexion réelle du bot dans ton application Windows. Il ne peut pas être effectué avec un bot déconnecté.",
+    fields: [
+      {id: "mode", type: "select", label: "Type de test", options: [
+        {value: "read_only", label: "Lecture réelle des salons et rôles (aucune modification)"},
+        {value: "active", label: "Test complet : salon privé temporaire, message, lecture puis suppression"}
+      ]},
+      {type: "info", text: "Le test complet crée puis supprime uniquement un salon privé temporaire. Si la suppression échoue, son ID sera affiché pour nettoyage manuel."}
+    ], confirmText: "Lancer le diagnostic", onConfirm: async ({mode}) => {
+      const report = await request("/api/live-test", {data: {guild_id: app.selected, mode}});
+      renderLiveTest(report);
+      toast(report.status === "verified" ? "Diagnostic connecté réussi." : "Diagnostic terminé avec des vérifications à corriger.", report.status !== "verified");
+    }});
+}
+
 async function createPlan() {
   if (!app.selected) return toast("Sélectionne un serveur.", true);
   const prompt = $("requestText").value.trim(); if (!prompt) return toast("Décris les changements à effectuer.", true);
@@ -1039,6 +1070,7 @@ async function init() {
   $("refreshButton").onclick = () => { loadDetails(); loadHistory(); toast("Actualisation lancée."); };
   $("structureRefresh").onclick = loadDetails;
   $("generateButton").onclick = createPlan;
+  $("testDiscordButton").onclick = testDiscord;
   $("voiceButton").onclick = toggleVoiceRecording;
   $("executeButton").onclick = executePlan;
   $("modeSelect").onchange = () => $("modelSelect").hidden = !app.models.length || $("modeSelect").value === "local";
