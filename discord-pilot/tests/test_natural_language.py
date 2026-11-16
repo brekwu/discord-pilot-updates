@@ -469,6 +469,38 @@ class ApiLanguageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, 400)
         self.assertEqual(app.STATE.history(prompt["guild_id"]), [])
 
+    async def test_p2_explicit_permission_request_produces_reviewer_draft(self):
+        gid = "1567347687379050727"
+        prompt = {"guild_id": gid, "mode": "local",
+                  "prompt": "Autorise le rôle Membre à voir le salon annonces"}
+        res = await self.client.post("/api/plan", json=prompt, headers=self.headers)
+        self.assertEqual(res.status, 200)
+        body = await res.json()
+        self.assertEqual(body["plan"]["status"], "draft")
+        self.assertEqual(body["plan"]["actions"], [{"type": "set_role_access", "channel": "annonces",
+                          "role": "Membre", "view": "allow", "participate": "keep"}])
+
+    async def test_p2_model_cannot_invent_access_for_vague_request(self):
+        prompt = {"guild_id": "1567347687379050727", "mode": "ollama", "prompt": "Organise les membres"}
+        invented = [{"type": "set_role_access", "channel": "annonces", "role": "Membre",
+                     "view": "allow", "participate": "allow"}]
+        with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
+             patch.object(app, "ollama_plan", new=AsyncMock(return_value=(invented, None))):
+            res = await self.client.post("/api/plan", json=prompt, headers=self.headers)
+        self.assertEqual(res.status, 400)
+        self.assertEqual(app.STATE.history(prompt["guild_id"]), [])
+
+    async def test_p2_model_cannot_add_unrequested_posting_permission(self):
+        prompt = {"guild_id": "1567347687379050727", "mode": "ollama",
+                  "prompt": "Merci d'autoriser le rôle Membre à voir le salon annonces"}
+        invented = [{"type": "set_role_access", "channel": "annonces", "role": "Membre",
+                     "view": "allow", "participate": "allow"}]
+        with patch.object(app, "ollama_models", new=AsyncMock(return_value=["model-essai"])), \
+             patch.object(app, "ollama_plan", new=AsyncMock(return_value=(invented, None))):
+            res = await self.client.post("/api/plan", json=prompt, headers=self.headers)
+        self.assertEqual(res.status, 400)
+        self.assertEqual(app.STATE.history(prompt["guild_id"]), [])
+
 
 if __name__ == "__main__":
     unittest.main()
