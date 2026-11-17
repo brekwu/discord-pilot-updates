@@ -37,6 +37,7 @@ from integration_catalog import PROVIDERS, catalog, recommended_providers
 from panel_actions import publish_panel
 from panel_planning import (complete_panel_plan, direct_panel_plan,
                             publication_requested)
+from prompt_preparer import prepare_prompt
 from plan_runtime import (direct_permission_plan, explicit_permission_intent,
                           permission_action_is_authorized, set_module_config)
 from planner import (DANGEROUS_ACTIONS, MODEL_PLAN_SCHEMA, PRESETS, SYSTEM_PROMPT, description,
@@ -1714,16 +1715,18 @@ async def api_plan(request):
     if not isinstance(raw_prompt, str) or not 3 <= len(raw_prompt.strip()) <= 8000:
         raise ValueError("Décris ta demande (3 à 8 000 caractères).")
     prompt = collapse_old_clarifications(raw_prompt)
+    interpretation = prepare_prompt(prompt)
+    planned_prompt = interpretation["rewritten"]
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
         raise ValueError("Mode d'interprétation inconnu.")
-    if channel_role_configuration_request(prompt) and not explicit_permission_intent(prompt):
+    if channel_role_configuration_request(planned_prompt) and not explicit_permission_intent(planned_prompt):
         return web.json_response({"configuration_required": "channel_role_access",
                                   "message": "Choisis les salons, le rôle et les accès à autoriser/refuser. "
                                              "Aucune permission n'est modifiée sans validation."})
     # An explicit, understood command must go straight to a draft. Never let
     # an optional model turn it into a repeated clarification dialog.
-    actions = supported_local_plan(prompt)
+    actions = supported_local_plan(planned_prompt)
     used = "local"
     model_question = None
     if not actions and mode != "local":
@@ -1735,28 +1738,97 @@ async def api_plan(request):
             if chosen not in models:
                 raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
             try:
-                actions, model_question = await ollama_plan(prompt, chosen, planning_context(guild_id))
+                actions, model_question = await ollama_plan(planned_prompt, chosen, planning_context(guild_id))
                 used = f"ollama:{chosen}"
             except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
                 raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
     if not actions:
         return web.json_response(plan_clarification(prompt, model_question))
-    actions = complete_panel_plan(prompt, actions)
+    actions = complete_panel_plan(planned_prompt, actions)
     if any(a["type"] in {"publish_ticket_panel", "publish_application_panel"} and
-           not publication_requested(prompt, "tickets" if a["type"] == "publish_ticket_panel" else "applications")
+           not publication_requested(planned_prompt, "tickets" if a["type"] == "publish_ticket_panel" else "applications")
            for a in actions):
         raise ValueError("L'IA ne peut pas publier un panneau interactif sans demande explicite de l'utilisateur.")
     if any(action["type"] == "set_channel_role_access" for action in actions):
         raise ValueError("Les permissions des salons se configurent dans « Gérer les rôles et accès des salons » : "
                          "les salons, le rôle et les droits doivent être choisis explicitement.")
-    if any(action["type"] == "set_role_access" and not permission_action_is_authorized(prompt, action)
+    if any(action["type"] == "set_role_access" and not permission_action_is_authorized(planned_prompt, action)
            for action in actions):
         raise ValueError("Permissions non justifiées par la demande : indique explicitement le rôle, "
                          "le salon et les droits à autoriser ou refuser. Aucun accès n'a été changé.")
     if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used)
+    if interpretation["changed"]:
+        plan["interpreted_prompt"] = planned_prompt
+        plan["interpretation_source"] = interpretation["source"]
+        STATE.save()
     return web.json_response({"plan": plan})
+
+
+async def api_rewrite(request):
+    """Explain and preview a request rewrite; do not touch Discord or drafts."""
+    data = await body_json(request)
+    prompt = data.get("prompt", "")
+    if not isinstance(prompt, str) or not 3 <= len(prompt.strip()) <= 8000:
+        raise ValueError("Décris ta demande (3 à 8 000 caractères).")
+    result = prepare_prompt(collapse_old_clarifications(prompt))
+    mode = data.get("mode", "auto")
+    if mode not in {"auto", "local", "ollama"}:
+        raise ValueError("Mode d'interprétation inconnu.")
+    # The deterministic interpreter has priority. A model-suggested rewrite
+    # is ONLY an editable preview; /api/plan never executes it implicitly.
+    if not result["changed"] and mode != "local":
+        models = await ollama_models()
+        if mode == "ollama" and not models:
+            raise ValueError("Aucun modèle Ollama local disponible pour reformuler la demande.")
+        if models:
+            selected = data.get("model") or models[0]
+            if selected not in models:
+                raise ValueError("Le modèle Ollama sélectionné n'est pas installé.")
+            proposed = await ollama_rewrite(result["original"], selected)
+            if proposed and proposed.strip() != result["original"]:
+                result.update({
+                    "rewritten": proposed.strip(), "changed": True,
+                    "source": f"proposition IA locale Ollama ({selected})",
+                    "explanation": (
+                        "Reformulation suggérée par le modèle local : elle n'est pas garantie. "
+                        "Vérifie chaque nom de salon, rôle et permission avant de l'utiliser. "
+                        "Aucune action Discord n'a été créée ni exécutée."
+                    ),
+                })
+    return web.json_response(result)
+
+
+async def ollama_rewrite(original: str, model: str) -> str | None:
+    """Ask the local model for text only; never accept its output as actions."""
+    timeout = aiohttp.ClientTimeout(total=90)
+    instruction = (
+        "Tu reformules des consignes françaises pour un assistant de configuration Discord. "
+        "Réécris la demande clairement à l'impératif. Garde toutes les opérations "
+        "et tous les noms, sans en inventer ni en omettre. N'ajoute aucun rôle, "
+        "aucun privilège, permission, salon, suppression, bot ou paramètre qui "
+        "n'est pas explicitement demandé. Si la demande est ambiguë, conserve-la. "
+        "Renvoie UNIQUEMENT un objet JSON {\"rewritten\":\"...\"}."
+    )
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post("http://127.0.0.1:11434/api/chat", json={
+                "model": model, "stream": False, "format": "json",
+                "options": {"temperature": 0},
+                "messages": [{"role": "system", "content": instruction},
+                             {"role": "user", "content": original}],
+            }) as response:
+                if response.status >= 400:
+                    return None
+                answer = await response.json()
+        value = json.loads(answer["message"]["content"]).get("rewritten")
+        if isinstance(value, str) and 3 <= len(value.strip()) <= 8000:
+            return value.strip()
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError, TypeError,
+            json.JSONDecodeError, OSError):
+        return None
+    return None
 
 
 async def api_live_test(request):
@@ -1943,6 +2015,7 @@ def build_app():
     app.router.add_get("/api/models", api_models)
     app.router.add_get("/api/catalog", api_catalog)
     app.router.add_post("/api/integrations/plan", api_integration_plan)
+    app.router.add_post("/api/rewrite", api_rewrite)
     app.router.add_post("/api/plan", api_plan)
     app.router.add_post("/api/live-test", api_live_test)
     app.router.add_post("/api/preset", api_preset)
