@@ -353,6 +353,10 @@ function actionDescription(a) {
     const terms = {keep: "inchangé", allow: "autorisé", deny: "refusé", inherit: "hérité"};
     return `Permissions de #${channel} pour ${role} · visibilité : ${terms[a.view]} · écrire/rejoindre : ${terms[a.participate]}`;
   }
+  if (a.type === "set_role_access") {
+    const rights = {keep: "inchangé", allow: "autorisé", deny: "interdit", inherit: "hérité"};
+    return `#${a.channel} · rôle ${a.role} · voir : ${rights[a.view]} · écrire/rejoindre : ${rights[a.participate]}`;
+  }
   let text = `${actionNames[a.type] || a.type} · ${a.type === "suggest_integration" ? app.catalog.providers[a.provider]?.name || a.provider : a.channel || a.name || ""}`;
   if (a.category) text += ` → ${a.category}`;
   if (a.new_name) text += ` → ${a.new_name}`;
@@ -369,6 +373,8 @@ function renderPlan() {
   const automation = p.actions.some(a => a.type.startsWith("configure_"));
   const external = p.actions.some(a => a.type === "suggest_integration");
   $("planMeta").textContent = `Serveur : ${currentGuild()?.name || p.guild_id} · ${p.mode}` + (automation ? " · ⚠ Messages automatiques uniquement quand le bot local reste lancé. L'intent Server Members et la permission Gérer le serveur sont nécessaires pour le suivi des invitations." : "") + (external ? " · ⚠ L'installation d'un bot tiers nécessite ton autorisation Discord sur le site officiel : elle n'est jamais automatique." : "");
+  $("planInterpretation").hidden = !p.interpreted_prompt;
+  $("planInterpretedText").textContent = p.interpreted_prompt || "";
   $("planBadge").textContent = stateName(p.status);
   $("planBadge").className = `pill ${p.status === "completed" ? "success" : ["failed", "partial"].includes(p.status) ? "failed" : ""}`;
   replace($("planActions"), p.actions.map((a, i) => {
@@ -822,6 +828,30 @@ async function createPlan() {
   finally { app.busy = false; $("generateButton").textContent = "✦ Préparer le plan  →"; renderOverview(); }
 }
 
+async function prepareRequest() {
+  const prompt = $("requestText").value.trim();
+  if (!prompt) return toast("Écris d'abord ta demande.", true);
+  const button = $("preparePromptButton"); button.disabled = true;
+  try {
+    const data = await request("/api/rewrite", {data: {prompt, mode: $("modeSelect").value,
+      model: $("modelSelect").value || undefined}});
+    modal({title: "Reformuler ma demande", description: data.changed
+      ? "L'interpréteur a détaillé ta consigne. Vérifie les salons, le rôle et les droits avant de garder cette version."
+      : "La consigne est conservée : aucune reformulation automatique fiable. Tu peux la préciser ici.",
+      fields: [
+        {type: "info", text: `${data.source} · ${data.explanation}`},
+        {id: "rewritten", type: "textarea", label: "Version pour le planificateur (modifiable)", value: data.rewritten}
+      ], confirmText: "Utiliser cette formulation", onConfirm: async ({rewritten}) => {
+        const revised = rewritten.trim();
+        if (revised.length < 3 || revised.length > 8000) throw new Error("La demande doit contenir de 3 à 8 000 caractères.");
+        $("requestText").value = revised;
+        app.plan = null; renderPlan();
+        toast("Demande prête. Clique sur « Préparer le plan » pour voir les actions.");
+      }});
+  } catch (e) { toast(e.message, true); }
+  finally { button.disabled = false; }
+}
+
 async function openChannelRolePermissions() {
   if (!app.selected) return toast("Sélectionne un serveur.", true);
   const guildId = app.selected;
@@ -1070,6 +1100,7 @@ async function init() {
   $("refreshButton").onclick = () => { loadDetails(); loadHistory(); toast("Actualisation lancée."); };
   $("structureRefresh").onclick = loadDetails;
   $("generateButton").onclick = createPlan;
+  $("preparePromptButton").onclick = prepareRequest;
   $("testDiscordButton").onclick = testDiscord;
   $("voiceButton").onclick = toggleVoiceRecording;
   $("executeButton").onclick = executePlan;
