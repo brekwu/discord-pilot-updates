@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const app = { csrf: "", bootstrap: null, selected: localStorage.getItem("pilotGuild") || "", details: null, history: [], plan: null, tab: "studio", models: [], catalog: {features: [], providers: {}}, moduleData: null, interactiveData: null, busy: false, updateAvailable: false };
 // No personal server identifiers are shipped in public updates; Discord provides real names after login.
 const known = {};
-const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations", suggest_integration: "Installer un bot externe (autorisation requise)", set_module: "Configurer un module local", configure_module: "Configurer le module natif", set_role_access: "Modifier les accès du rôle", publish_ticket_panel: "Publier le panneau interactif des tickets", publish_application_panel: "Publier le formulaire interactif des candidatures" };
+const actionNames = { create_category: "Créer une catégorie", create_text_channel: "Créer un salon textuel", create_voice_channel: "Créer un salon vocal", create_role: "Créer un rôle", rename_channel: "Renommer un salon", rename_role: "Renommer un rôle", set_topic: "Modifier la description", send_message: "Publier un message", make_private: "Rendre un salon privé", lock_channel_writing: "Lecture seule pour les membres", delete_channel: "SUPPRIMER UN SALON", delete_role: "SUPPRIMER UN RÔLE", configure_welcome: "Activer les bienvenues automatiques", configure_farewell: "Activer les au-revoir automatiques", configure_invites: "Activer le compteur d'invitations", suggest_integration: "Installer un bot externe (autorisation requise)", set_module: "Configurer un module local", configure_module: "Configurer le module natif", set_role_access: "Modifier les accès du rôle", publish_ticket_panel: "Publier le panneau interactif des tickets", publish_application_panel: "Publier le formulaire interactif des candidatures" };
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -365,6 +365,8 @@ function actionDescription(a) {
 function renderPlan() {
   const p = app.plan; $("planPanel").hidden = !p;
   if (!p) return;
+  $("understoodPanel").hidden = !p.interpretation;
+  $("understoodText").textContent = p.interpretation || "";
   $("planTitle").textContent = `${p.actions.length} action${p.actions.length > 1 ? "s" : ""} à ${p.status === "draft" ? "valider" : "suivre"}`;
   const automation = p.actions.some(a => a.type.startsWith("configure_"));
   const external = p.actions.some(a => a.type === "suggest_integration");

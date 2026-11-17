@@ -19,6 +19,25 @@ puis redémarre l'application. Tes données restent dans
 `%LOCALAPPDATA%\DiscordPilot\`. Si Windows bloque la mise à jour,
 le diagnostic se trouve dans `%LOCALAPPDATA%\DiscordPilot\updater.log`.
 
+## Nouveauté 0.5.18 : préparateur de demandes
+
+Le studio comprend maintenant la demande naturelle « Modifie les rôles pour les
+salons au revoir, bienvenue, invitation pour pas que tout le monde puisse écrire
+dedans », même sans modèle IA. Il prépare trois actions de **lecture seule**
+avant toute exécution Discord. Les salons restent visibles, les membres ordinaires
+perdent les droits d'écriture de ces salons (y compris les autorisations particulières
+de leurs rôles), et les administrateurs et ce bot conservent leurs droits. Les
+intégrations tierces avec un rôle géré ou des permissions individuelles explicites
+conservent leurs autorisations : vérifier leurs messages après application.
+
+L'interface affiche maintenant **Demande comprise** avec une reformulation
+du plan. Les noms de salons comportant des accents, emojis, tirets ou un simple
+pluriel sont rapprochés seulement si le résultat est unique. Sinon, l'application
+demande le nom exact. **Aucune modification n'est faite avant validation.**
+
+Cette version est distribuée avec le bouton **MAJ** : il n'est pas nécessaire de
+réinstaller Discord Pilot ni de coller un token déjà mémorisé.
+
 ### Variante pour développeurs (fichiers Python)
 
 1. Décompresse le ZIP dans un dossier de ton choix.

@@ -41,8 +41,9 @@ from plan_runtime import (direct_permission_plan, explicit_permission_intent,
                           permission_action_is_authorized, set_module_config)
 from planner import (DANGEROUS_ACTIONS, MODEL_PLAN_SCHEMA, PRESETS, SYSTEM_PROMPT, description,
                      channel_role_configuration_request, collapse_old_clarifications, community_automation_plan,
-                     default_creation_plan, local_parse,
-                     norm, parse_ollama_decision,
+                     default_creation_plan, direct_lock_writing_plan, local_parse,
+                     norm, parse_ollama_decision, resolve_lock_targets,
+                     understood_request, writing_restriction_requested,
                      validate_actions)
 from storage import State, load_token, remove_token, save_token
 from updater import (MAX_EXE_SIZE, MAX_ZIP_SIZE, RESTART_UPDATE_CODE, inspect_manifest,
@@ -1543,6 +1544,10 @@ async def api_update_apply(request):
 
 def supported_local_plan(prompt: str) -> list[dict]:
     """Compose several individually understood clauses without dropping any."""
+    # A complete, explicit read-only request is handled before the optional AI.
+    writing = direct_lock_writing_plan(prompt)
+    if writing and not re.search(r"[;\n]|\b(?:puis|ensuite|apres|après|et\s+(?:cree|crée|supprime|renomme|active))\b", prompt, re.I):
+        return writing
     guided = (guided_workflow_plan(prompt) or server_preset_plan(prompt)
               or batch_module_plan(prompt))
     if guided:
@@ -1565,7 +1570,8 @@ def supported_local_plan(prompt: str) -> list[dict]:
     actions = []
     for clause in clauses:
         providers = recommended_providers(clause)
-        parsed = (community_automation_plan(clause)
+        parsed = (direct_lock_writing_plan(clause)
+                  or community_automation_plan(clause)
                   or direct_panel_plan(clause)
                   or direct_permission_plan(clause)
                   or native_module_plan(clause)
@@ -1753,9 +1759,20 @@ async def api_plan(request):
            for action in actions):
         raise ValueError("Permissions non justifiées par la demande : indique explicitement le rôle, "
                          "le salon et les droits à autoriser ou refuser. Aucun accès n'a été changé.")
+    if any(action["type"] == "lock_channel_writing" for action in actions):
+        if not writing_restriction_requested(prompt):
+            raise ValueError("L'IA a proposé un changement de permissions non demandé.")
+        guild = MANAGER.get_guild(guild_id)
+        if guild:
+            actions, question = resolve_lock_targets(actions, [channel.name for channel in guild.text_channels])
+            if question:
+                return web.json_response({"needs_clarification": True, "question": question,
+                                          "message": "Aucune modification n'a été effectuée.",
+                                          "examples": ["Mets #bienvenue en lecture seule"]})
     if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
-    plan = STATE.add(guild_id, prompt.strip(), actions, used)
+    plan = STATE.add(guild_id, prompt.strip(), actions, used,
+                     interpretation=understood_request(actions))
     return web.json_response({"plan": plan})
 
 

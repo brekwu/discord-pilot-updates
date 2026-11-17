@@ -66,3 +66,4 @@
 .interactive-card input,.interactive-card textarea,.interactive-card select{width:100%;border:1px solid #59436b;background:#15101f;color:#f4eaff;border-radius:9px;padding:9px;box-sizing:border-box;font-size:12px}
 .interactive-card .primary-button{margin-top:auto}
 .interactive-card input:focus-visible,.interactive-card textarea:focus-visible,.interactive-card select:focus-visible{outline:2px solid #a476ef}
+.understood-panel{margin-top:18px;padding:16px 18px;border:1px solid #684b8e;border-radius:12px;background:#29213e}.understood-panel strong{color:#d2b6ff;font-size:11px}.understood-panel p{color:#e3d8f3;font-size:12px;line-height:1.65;margin:8px 0 0;overflow-wrap:anywhere}

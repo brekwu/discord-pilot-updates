@@ -14,7 +14,7 @@ from community_modules import MODULES
 ACTION_TYPES = {
     "create_category", "create_text_channel", "create_voice_channel",
     "create_role", "rename_channel", "rename_role", "set_topic",
-    "send_message", "make_private", "delete_channel", "delete_role",
+    "send_message", "make_private", "lock_channel_writing", "delete_channel", "delete_role",
     "configure_welcome", "configure_farewell", "configure_invites",
     "suggest_integration",
     "set_module",
@@ -33,6 +33,7 @@ ACTION_LABELS = {
     "set_topic": "Modifier la description du salon",
     "send_message": "Publier un message",
     "make_private": "Rendre le salon privé",
+    "lock_channel_writing": "Mettre le salon en lecture seule pour les membres",
     "delete_channel": "Supprimer le salon",
     "delete_role": "Supprimer le rôle",
     "configure_welcome": "Activer les messages d'arrivée",
@@ -59,6 +60,7 @@ FIELDS = {
     "set_topic": ("name", "topic"),
     "send_message": ("channel", "content"),
     "make_private": ("name", "role"),
+    "lock_channel_writing": ("name",),
     "delete_channel": ("name",),
     "delete_role": ("name",),
     "configure_welcome": ("channel",),
@@ -155,6 +157,71 @@ def requested_count(text: str) -> int | None:
 
 def action(action_type: str, **kwargs: str) -> dict[str, str]:
     return {"type": action_type, **kwargs}
+
+
+_DENY_WRITING = re.compile(
+    r"(?:lecture\s+seule|read[ -]?only|"
+    r"(?:interdi\w*|bloqu\w*|empech\w*|desactiv\w*|retir\w*)[^;\n]{0,110}"
+    r"(?:ecri\w*|envoi\w*|envoy\w*|poster|messages?|parler)|"
+    r"(?:pas|plus|personne|aucun)[^;\n]{0,110}(?:ecri\w*|envoy\w*|poster|parler))"
+)
+
+
+def writing_restriction_requested(prompt: str) -> bool:
+    return bool(_DENY_WRITING.search(norm(prompt)))
+
+
+def direct_lock_writing_plan(prompt: str) -> list[dict[str, str]]:
+    """Translate conversational read-only requests into explicit safe actions."""
+    if not writing_restriction_requested(prompt):
+        return []
+    matched = re.search(r"\b(?:salons?|channels?|chans?|canaux)\s+(.+)$", prompt, re.I)
+    if not matched:
+        return []
+    names = re.split(
+        r"(?:^|\s+)(?:pour\s+(?:pas|ne|que|empecher|interdire|bloquer)|afin\s+(?:de|que)|"
+        r"de\s+sorte\s+que|en\s+lecture\s+seule|ou\s+personne\s+ne)\b",
+        matched.group(1), maxsplit=1, flags=re.I,
+    )[0]
+    names = re.sub(r"^(?:les?|des)\s+", "", clean_name(names), flags=re.I)
+    targets = split_names(names)
+    if not targets or any(len(name) > 100 for name in targets):
+        return []
+    return validate_actions([action("lock_channel_writing", name=name) for name in targets])
+
+
+def _channel_name_key(value: str) -> str:
+    key = "".join(re.findall(r"[a-z0-9]", norm(value)))
+    return key[:-1] if key.endswith("s") and len(key) > 5 else key
+
+
+def resolve_lock_targets(actions: list[dict], known_names: list[str]) -> tuple[list[dict], str | None]:
+    """Resolve emojis, dashes and simple plurals; refuse missing/ambiguous matches."""
+    resolved = []
+    for item in actions:
+        if item["type"] != "lock_channel_writing":
+            resolved.append(item)
+            continue
+        exact = [n for n in known_names if norm(n) == norm(item["name"])]
+        matches = exact or [n for n in known_names if _channel_name_key(n) == _channel_name_key(item["name"])]
+        if len(matches) != 1:
+            kind = "introuvable" if not matches else "ambigu"
+            return [], f"Le salon « {item['name']} » est {kind}. Donne-moi son nom exact."
+        resolved.append({**item, "name": matches[0]})
+    targets = [norm(a["name"]) for a in resolved if a["type"] == "lock_channel_writing"]
+    if len(targets) != len(set(targets)):
+        return [], "Plusieurs noms désignent le même salon. Donne chaque salon une seule fois."
+    return resolved, None
+
+
+def understood_request(actions: list[dict]) -> str:
+    locked = [a["name"] for a in actions if a["type"] == "lock_channel_writing"]
+    if locked and len(locked) == len(actions):
+        return ("Mettre " + ", ".join(f"#{name}" for name in locked) +
+                " en lecture seule pour les membres ordinaires, sans masquer les salons. "
+                "Les administrateurs et Discord Pilot pourront continuer à écrire ; "
+                "les droits d'écriture des rôles non administrateurs seront refusés.")
+    return " ; ".join(description(a) for a in actions)
 
 
 def validate_actions(value: Any) -> list[dict[str, str]]:
@@ -345,6 +412,7 @@ configure_module {type,module,enabled,...paramètres} (module : un des 17 identi
 Modules et paramètres : autorole(role_id), xp(channel_id facultatif), level_rewards(level,role_id), invite_rewards(invites,role_id), activity_stats(aucun), warnings(channel_id privé), antispam(aucun), antilinks(aucun), wordfilter(words séparés par virgules), audit(channel_id privé), suggestions(channel_id), voice_rooms(lobby_id vocal), reaction_role(message_id,emoji,role_id), daily_post(channel_id,hour HH:MM,message), tickets(panel_channel_id,category_id,staff_role_id facultatif), modmail(staff_channel_id privé,staff_role_id facultatif), applications(panel_channel_id,staff_channel_id privé,staff_role_id facultatif).
 Si une valeur obligatoire n'est pas indiquée et que le contexte ne la contient pas explicitement, demande une précision ; ne devine jamais les cibles d'un module.
 set_role_access {type,channel,role,view,participate} (nom exact ou ID de salon/rôle ; view et participate parmi "allow", "deny", "inherit", "keep", mais pas deux "keep").
+lock_channel_writing {type,name} (lecture seule pour les membres non administrateurs ; conserver la visibilité ; préserver les administrateurs et le bot).
 N'utilise set_role_access que si l'utilisateur demande explicitement un changement précis de visibilité ou participation pour un rôle sur un salon ciblé. Ne devine ni les droits ni les rôles.
 publish_ticket_panel {type} (uniquement après activation et paramétrage complet de tickets ; publie un bouton dans le salon configuré ; ne duplique pas un panneau encore actif).
 publish_application_panel {type} (uniquement après activation et paramétrage complet de applications ; publie un bouton dans le salon configuré ; ne duplique pas un panneau encore actif).
@@ -703,6 +771,8 @@ def description(item: dict[str, str]) -> str:
         return f"{label} dans #{item['channel']} : {item['content'][:80]}"
     if item["type"] == "make_private":
         return f"{label} #{item['name']} pour @{item['role']}"
+    if item["type"] == "lock_channel_writing":
+        return f"{label} #{item['name']} (administrateurs et bot exceptés)"
     text = f"{label} « {item['name']} »"
     if "new_name" in item:
         text += f" → « {item['new_name']} »"

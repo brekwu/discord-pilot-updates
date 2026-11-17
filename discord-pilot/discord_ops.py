@@ -178,6 +178,51 @@ async def execute_action(guild: discord.Guild, item: dict, state=None, created=N
         await channel.set_permissions(role, overwrite=role_overwrite, reason=reason)
         await channel.set_permissions(everyone, overwrite=every_overwrite, reason=reason)
         return "done", "Accès fermé à @everyone et autorisé au rôle choisi."
+    if t == "lock_channel_writing":
+        channel = get_channel(item["name"])
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError("La lecture seule concerne les salons textuels uniquement.")
+        flags = ("send_messages", "send_messages_in_threads",
+                 "create_public_threads", "create_private_threads")
+        changes = 0
+        for role in guild.roles:
+            if not role.is_default() and (role.managed or role.permissions.administrator):
+                # Preserve managed integrations and administrator bypasses.
+                continue
+            overwrite = channel.overwrites_for(role)
+            if role.is_default():
+                requires_update = any(getattr(overwrite, key) is not False for key in flags)
+            else:
+                requires_update = any(getattr(overwrite, key) is True for key in flags)
+            if requires_update:
+                for key in flags:
+                    if role.is_default() or getattr(overwrite, key) is True:
+                        setattr(overwrite, key, False)
+                await channel.set_permissions(role, overwrite=overwrite, reason=reason)
+                changes += 1
+        for target in channel.overwrites:
+            if target in guild.roles or getattr(target, "bot", False):
+                continue
+            if getattr(getattr(target, "guild_permissions", None), "administrator", False):
+                continue
+            overwrite = channel.overwrites_for(target)
+            if any(getattr(overwrite, key) is True for key in flags):
+                for key in flags:
+                    if getattr(overwrite, key) is True:
+                        setattr(overwrite, key, False)
+                await channel.set_permissions(target, overwrite=overwrite, reason=reason)
+                changes += 1
+        if guild.me:
+            bot_overwrite = channel.overwrites_for(guild.me)
+            if bot_overwrite.send_messages is not True or bot_overwrite.send_messages_in_threads is not True:
+                bot_overwrite.send_messages = True
+                bot_overwrite.send_messages_in_threads = True
+                await channel.set_permissions(guild.me, overwrite=bot_overwrite, reason=reason)
+                changes += 1
+        if changes == 0:
+            return "skipped", "Ce salon est déjà en lecture seule pour les membres non administrateurs."
+        return "done", (f"Lecture seule appliquée : {changes} réglage(s). Visibilité inchangée. "
+                        "Vérifie les permissions des autres bots automatisés si nécessaire.")
     if t in {"set_channel_role_access", "set_role_access"}:
         channel = (guild.get_channel(int(item["channel_id"])) if t == "set_channel_role_access"
                    else get_channel(item["channel"]))

@@ -39,7 +39,7 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer les plans conversationnels et le diagnostic P4 0.5.17
+      - name: Appliquer les plans conversationnels et le diagnostic P4 0.5.18
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
@@ -68,6 +68,7 @@ jobs:
           Copy-Item 'discord-pilot/tests/test_p3_panels.py' 'buildsrc/discord-pilot/tests/test_p3_panels.py' -Force
           Copy-Item 'discord-pilot/tests/test_p4_workflows.py' 'buildsrc/discord-pilot/tests/test_p4_workflows.py' -Force
           Copy-Item 'discord-pilot/tests/test_executor.py' 'buildsrc/discord-pilot/tests/test_executor.py' -Force
+          Copy-Item 'discord-pilot/tests/test_prompt_preparer.py' 'buildsrc/discord-pilot/tests/test_prompt_preparer.py' -Force
           Copy-Item 'discord-pilot/tests/test_automations.py' 'buildsrc/discord-pilot/tests/test_automations.py' -Force
           Copy-Item 'discord-pilot/tests/test_integrations.py' 'buildsrc/discord-pilot/tests/test_integrations.py' -Force
           Copy-Item 'discord-pilot/tests/test_community_modules.py' 'buildsrc/discord-pilot/tests/test_community_modules.py' -Force
@@ -105,7 +106,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.17' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.18' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -171,6 +172,9 @@ jobs:
             $rolesPrompt = @{guild_id='1567347687379050727';mode='auto';prompt='Gere les roles des salons que tu viens de creer'} | ConvertTo-Json
             $rolesDraft = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/plan' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($rolesPrompt)) -TimeoutSec 90
             if ($rolesDraft.configuration_required -ne 'channel_role_access' -or $page.Content -notmatch 'configureChannelRoles') { throw 'La demande de permissions ne propose pas le formulaire guide.' }
+            $restrictPrompt = @{guild_id='1567347687379050727';mode='local';prompt='Modifie les rôles pour les salons au revoir, bienvenue, invitation pour pas que tout le monde puisse écrire dedans'} | ConvertTo-Json
+            $restrictDraft = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/plan' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($restrictPrompt)) -TimeoutSec 15
+            if ($restrictDraft.plan.status -ne 'draft' -or $restrictDraft.plan.actions.Count -ne 3 -or (@($restrictDraft.plan.actions | Where-Object { $_.type -eq 'lock_channel_writing' }).Count -ne 3) -or -not $restrictDraft.plan.interpretation) { throw 'Le preparateur n a pas compris la mise en lecture seule de trois salons.' }
             $vaguePrompt = @{guild_id='1567347687379050727';mode='local';prompt='Arrange le serveur a ta convenance'} | ConvertTo-Json
             $vagueResult = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/plan' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$data.csrf} -Body ([System.Text.Encoding]::UTF8.GetBytes($vaguePrompt)) -TimeoutSec 10
             if (-not $vagueResult.needs_clarification -or -not $vagueResult.question -or -not $vagueResult.examples) { throw 'La demande sans action ne propose pas de clarification editable.' }
@@ -237,7 +241,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.17' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.18' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -270,7 +274,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $boot = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
-                if ($boot.version -eq '0.5.17') { $ready = $true; break }
+                if ($boot.version -eq '0.5.18') { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw 'L EXE s est arrete avant de preparer la mise a jour.' }
             }
@@ -280,7 +284,7 @@ jobs:
             # restart without needing to build an unpublishable second binary.
             Copy-Item $installed (Join-Path $updates 'pending.exe') -Force
             $hash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-            $pending = @{version='0.5.17';sha256=$hash;format='exe'} | ConvertTo-Json
+            $pending = @{version='0.5.18';sha256=$hash;format='exe'} | ConvertTo-Json
             [System.IO.File]::WriteAllText((Join-Path $updates 'pending.json'), $pending)
             $response = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/update/apply' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$boot.csrf} -Body '{}'
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
@@ -291,10 +295,10 @@ jobs:
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
                 $logPath = Join-Path $dataRoot 'updater.log'
-                if ($boot2.version -eq '0.5.17' -and
+                if ($boot2.version -eq '0.5.18' -and
                     -not (Test-Path (Join-Path $updates 'pending.json')) -and
                     (Test-Path $logPath) -and
-                    (Select-String -Path $logPath -Pattern 'Version 0.5.17 installee et ouverte' -Quiet)) {
+                    (Select-String -Path $logPath -Pattern 'Version 0.5.18 installee et ouverte' -Quiet)) {
                   $restarted = $true
                   break
                 }
@@ -342,11 +346,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.5.17
+          name: DiscordPilot_EXE_Windows_v0.5.18
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
 
-      - name: Publier la version 0.5.17 après les tests Windows
+      - name: Publier la version 0.5.18 après les tests Windows
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -362,23 +366,23 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'P4 demandes complexes : planification locale ordonnee de la structure et des modules tickets/candidatures dans une seule demande, activation groupee des modules sans parametres et modeles de serveurs. Nouveau diagnostic Discord connecte : lecture des salons et roles, test actif optionnel dans un salon prive temporaire avec suppression et rapport de nettoyage. Correctifs de selection du mode diagnostic et archive source complete. Aucun token requis pour les tests simules de CI ; la connexion reelle reste a verifier depuis le PC du proprietaire. Version 0.5.17, tests Python et reel EXE Windows.'
-          $tag = 'v0.5.17'
+          $notes = 'Discord Pilot 0.5.18 : preparateur de demandes en francais, mise en lecture seule de plusieurs salons, conservation des administrateurs et du bot, verification des noms et apercu de la demande comprise. Tests Python et tests du vrai EXE Windows avant publication. Mise a jour automatique via le bouton MAJ, sans reinstallation.'
+          $tag = 'v0.5.18'
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe $archive --clobber
           } else {
-            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.17' --notes $notes
+            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.18' --notes $notes
           }
           if ($LASTEXITCODE -ne 0) { throw 'La publication de la release a échoué.' }
 
           $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $archiveSha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
-            version = '0.5.17'
-            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.17/DiscordPilot_Source.zip'
+            version = '0.5.18'
+            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.18/DiscordPilot_Source.zip'
             sha256 = $archiveSha
-            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.17/DiscordPilot.exe'
+            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.18/DiscordPilot.exe'
             exe_sha256 = $exeSha
           }
           $json = ConvertTo-Json -InputObject $manifest -Depth 3
@@ -386,7 +390,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add update.json
-          git commit -m 'chore: publier le manifeste 0.5.17'
+          git commit -m 'chore: publier le manifeste 0.5.18'
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être enregistré.' }
           git push origin HEAD:main
           if ($LASTEXITCODE -ne 0) { throw 'Le manifeste de mise à jour n a pas pu être publié.' }

@@ -58,12 +58,15 @@ class State:
             json.dump(self.state, fp, indent=2, ensure_ascii=False)
         os.replace(temporary, self.path)
 
-    def add(self, guild_id: str, prompt: str, actions: list[dict], mode: str) -> dict:
+    def add(self, guild_id: str, prompt: str, actions: list[dict], mode: str,
+            interpretation: str | None = None) -> dict:
         row = {
             "id": uuid4().hex, "guild_id": guild_id, "prompt": prompt,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "mode": mode, "status": "draft", "actions": actions, "results": [],
         }
+        if interpretation:
+            row["interpretation"] = interpretation
         self.state["plans"].insert(0, row)
         self.save()
         return row
