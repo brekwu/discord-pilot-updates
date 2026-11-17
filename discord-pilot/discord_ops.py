@@ -21,6 +21,8 @@ def find_unique(items, name: str, description: str):
 
 
 def role_by_name(guild, name: str):
+    if norm(name.strip().lstrip("@")) == "everyone":
+        return guild.default_role
     return find_unique(guild.roles, name, "Rôle")
 
 
