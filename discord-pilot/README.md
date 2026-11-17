@@ -147,6 +147,16 @@ Les plans ne sont jamais exécutés sans validation. Une instruction ambiguë ou
 
 Le bouton **Tester le bot sur Discord**, dans le Studio, fonctionne après connexion du bot local. Le mode lecture seule utilise les appels API de Discord pour récupérer les salons et rôles, puis vérifie les permissions globales. Sur autorisation explicite, le mode actif crée un **salon privé temporaire**, y écrit un message, relit ce message et supprime ce seul salon. En cas d'échec de nettoyage, l'interface indique précisément le nom et l'ID du salon laissé sur le serveur. Le diagnostic ne peut pas être lancé depuis une instance déconnectée ; une simulation de ces appels dans les tests n'est **pas** une validation d'un serveur réel.
 
+### P5 — Reformulation des demandes avant planification (v0.5.18)
+
+Le Studio propose désormais le bouton **✎ Reformuler ma demande**. Il affiche une version modifiable et explique les transformations réalisées, sans effectuer d'action Discord ni enregistrer de plan. Une fois la formulation retenue, **✦ Préparer le plan** génère toujours un brouillon à contrôler séparément. Les demandes reconnues sont aussi reformulées automatiquement au moment de la planification et le brouillon conserve la demande d'origine ainsi que sa version interprétée.
+
+Exemple pris en charge **hors ligne et sans clé API** : « Modifie les rôles pour les salons au revoir, bienvenue, invitation pour pas que tout le monde puisse écrire dedans ». Cette demande produit trois actions `set_role_access`, pour le rôle système `@everyone` dans `#au-revoir`, `#bienvenue` et `#invitation` : `send_messages=False`, **sans masquer les salons ni modifier les autres rôles**. Seuls les noms explicitement demandés sont visés. Si un nom ne correspond à aucun salon existant ou est ambigu, l'exécution échoue sans deviner un autre salon. Une validation sur le vrai serveur reste nécessaire.
+
+La reformulation automatique reste volontairement **limitée aux formulations non ambiguës qu'elle sait vérifier**. Pour des demandes générales plus complexes, un modèle Ollama local installé peut aider le planificateur, mais ni la reformulation ni l'IA ne permettent au bot d'exécuter des fonctions Discord inexistantes ou d'inventer des permissions.
+
+Lorsque la demande n'est pas reconnue par l'interpréteur local et que le mode « Automatique » ou « IA locale Ollama » est sélectionné, le bouton de reformulation peut demander une **proposition de texte** à Ollama sur le même PC. Cette proposition n'est jamais utilisée directement par `/api/plan` : elle doit d'abord être relue et acceptée dans la fenêtre de reformulation. Sans modèle Ollama installé, seules les reformulations contrôlées et les commandes locales sont disponibles.
+
 ### Modules natifs locaux (v0.5.11)
 
 **Correction v0.5.10 du planificateur IA :** accepte désormais certaines réponses JSON courantes d'Ollama (`plan`, `commands`, `result`, ou une action unique) tout en appliquant exactement la même liste d'actions autorisées. « Active les statistiques des messages » peut être traité localement sans dépendre d'Ollama. Si le modèle ne peut toujours pas produire un plan, l'application explique les opérations possibles et propose l'onglet Modules actifs pour les fonctions nécessitant des paramètres ; elle n'invente pas une action à exécuter.
