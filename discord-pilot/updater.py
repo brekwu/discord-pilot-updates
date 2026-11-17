@@ -31,6 +31,8 @@ TRUSTED_HOSTS = {
 }
 UPDATABLE = {
     "app.py", "planner.py", "storage.py", "discord_ops.py", "integration_catalog.py", "community_modules.py", "community_interactions.py", "community_support.py", "updater.py", "updater_cli.py",
+    "plan_runtime.py", "panel_actions.py", "panel_planning.py", "conversational_workflows.py",
+    "discord_diagnostics.py", "prompt_preparer.py",
     "requirements.txt", "version.json", "README.md", "web/index.html", "web/app.js", "web/style.css", "web/updates.css",
     "LANCER_DISCORD_PILOT.bat", "DEMARRER_DISCORD_PILOT.cmd", "demarrer.ps1", "CONSTRUIRE_EXE_WINDOWS.bat",
 }
