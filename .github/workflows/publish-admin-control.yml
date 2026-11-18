@@ -1,6 +1,10 @@
 name: Publier une mise à jour Admin Control
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'admin-control/publish-request.json'
   workflow_dispatch:
     inputs:
       version:
@@ -29,17 +33,23 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Valider la demande de publication
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_ARCHIVE_URL: ${{ inputs.archive_url }}
+          INPUT_ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+        run: python3 scripts/publish_admin_control.py --load-request
       - name: Vérifier SHA256 du ZIP et SHA512 de l'EXE
         env:
-          ADMIN_UPDATE_ARCHIVE_URL: ${{ inputs.archive_url }}
-          ADMIN_UPDATE_ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
-          ADMIN_CONTROL_VERSION: ${{ inputs.version }}
+          ADMIN_UPDATE_ARCHIVE_URL: ${{ env.ADMIN_UPDATE_ARCHIVE_URL }}
+          ADMIN_UPDATE_ARCHIVE_SHA256: ${{ env.ADMIN_UPDATE_ARCHIVE_SHA256 }}
+          ADMIN_CONTROL_VERSION: ${{ env.ADMIN_CONTROL_VERSION }}
         run: python3 scripts/publish_admin_control.py "$ADMIN_CONTROL_VERSION"
 
       - name: Publier l'installateur comme release public
         env:
           GH_TOKEN: ${{ github.token }}
-          ADMIN_CONTROL_VERSION: ${{ inputs.version }}
+          ADMIN_CONTROL_VERSION: ${{ env.ADMIN_CONTROL_VERSION }}
         run: |
           set -euo pipefail
           tag="admin-control-v${ADMIN_CONTROL_VERSION}"
@@ -57,7 +67,7 @@ jobs:
 
       - name: Publier le canal stable et vérifier son URL
         env:
-          ADMIN_CONTROL_VERSION: ${{ inputs.version }}
+          ADMIN_CONTROL_VERSION: ${{ env.ADMIN_CONTROL_VERSION }}
         run: |
           set -euo pipefail
           mkdir -p admin-control

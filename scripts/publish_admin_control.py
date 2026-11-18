@@ -7,6 +7,7 @@ remain private. The input URL is ephemeral and never written into the feed.
 import base64
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -87,6 +88,30 @@ def prepare(version: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        fail("Usage: python3 publish_admin_control.py VERSION")
-    prepare(sys.argv[1])
+    if len(sys.argv) == 2 and sys.argv[1] == "--load-request":
+        if os.environ.get("GITHUB_EVENT_NAME") == "push":
+            request = json.loads(Path("admin-control/publish-request.json").read_text("utf-8"))
+        else:
+            request = {
+                "version": os.environ.get("INPUT_VERSION", ""),
+                "archive_url": os.environ.get("INPUT_ARCHIVE_URL", ""),
+                "archive_sha256": os.environ.get("INPUT_ARCHIVE_SHA256", ""),
+            }
+        values = {
+            "ADMIN_CONTROL_VERSION": request["version"],
+            "ADMIN_UPDATE_ARCHIVE_URL": request["archive_url"],
+            "ADMIN_UPDATE_ARCHIVE_SHA256": request["archive_sha256"],
+        }
+        # Reject newline / injection into GitHub Actions environment-file syntax.
+        if any(not isinstance(v, str) or "\n" in v or "\r" in v for v in values.values()):
+            fail("Invalid publication fields.")
+        if not re.fullmatch(r"\d+\.\d+\.\d+", values["ADMIN_CONTROL_VERSION"]):
+            fail("Invalid requested version.")
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+            for key, value in values.items():
+                output.write(f"{key}={value}\n")
+        print("Validated publication request.")
+    elif len(sys.argv) == 2:
+        prepare(sys.argv[1])
+    else:
+        fail("Usage: publish_admin_control.py VERSION | --load-request")
