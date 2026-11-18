@@ -1,0 +1,82 @@
+name: Publier une mise à jour Admin Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version exacte compilée sous Windows, ex. 1.27.1
+        required: true
+        type: string
+      archive_url:
+        description: Lien temporaire ZIP de l'artefact Windows compilé
+        required: true
+        type: string
+      archive_sha256:
+        description: SHA256 exact du ZIP GitHub Actions
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: admin-control-publication
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Vérifier SHA256 du ZIP et SHA512 de l'EXE
+        env:
+          ADMIN_UPDATE_ARCHIVE_URL: ${{ inputs.archive_url }}
+          ADMIN_UPDATE_ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+          ADMIN_CONTROL_VERSION: ${{ inputs.version }}
+        run: python3 scripts/publish_admin_control.py "$ADMIN_CONTROL_VERSION"
+
+      - name: Publier l'installateur comme release public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ADMIN_CONTROL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="admin-control-v${ADMIN_CONTROL_VERSION}"
+          exe="release/AdminControl-Setup-${ADMIN_CONTROL_VERSION}.exe"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Une release existe déjà pour cette version ; aucune modification des binaires existants."
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "AdminControl-Setup-${ADMIN_CONTROL_VERSION}.exe" --dir old
+            cmp -s "$exe" "old/AdminControl-Setup-${ADMIN_CONTROL_VERSION}.exe" || { echo "Release existante différente : refus."; exit 1; }
+          else
+            gh release create "$tag" "$exe" "release/latest.yml" --repo "$GITHUB_REPOSITORY" \
+              --title "Admin Control ${ADMIN_CONTROL_VERSION}" \
+              --notes "Installeur Windows NSIS. Le bouton MAJ d’Admin Control utilise le manifeste public vérifié SHA512." \
+              --latest=false
+          fi
+
+      - name: Publier le canal stable et vérifier son URL
+        env:
+          ADMIN_CONTROL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p admin-control
+          cp release/latest.yml admin-control/latest.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add admin-control/latest.yml
+          if ! git diff --cached --quiet; then
+            git commit -m "release(admin-control): ${ADMIN_CONTROL_VERSION}"
+            git push origin HEAD:main
+          fi
+          for try in 1 2 3 4 5; do
+            if curl --fail --silent --location --max-time 15 \
+              "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/admin-control/latest.yml" \
+              | grep -q "^version: ${ADMIN_CONTROL_VERSION}$"; then
+              echo "Public updater feed verified for ${ADMIN_CONTROL_VERSION}."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "GitHub raw manifest has not propagated yet." >&2
+          exit 1
