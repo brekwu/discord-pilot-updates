@@ -19,6 +19,19 @@ puis redémarre l'application. Tes données restent dans
 `%LOCALAPPDATA%\DiscordPilot\`. Si Windows bloque la mise à jour,
 le diagnostic se trouve dans `%LOCALAPPDATA%\DiscordPilot\updater.log`.
 
+## Correction 0.5.20 : interprétation des demandes structurées
+
+Une demande structurée courte passe désormais par l'analyse des sections :
+les consignes d'introduction ne font plus disparaître une liste de rôles qui
+suit. Les en-têtes avec emojis et les rubriques « Salons vocaux » sont
+reconnus dans les listes explicites. Ollama privilégie les modèles de
+conversation 7–9B disponibles plutôt qu'un modèle d'embeddings, et
+l'interface indique quand aucun modèle IA de conversation n'est disponible.
+
+Ces améliorations ne garantissent pas que tous les modèles locaux comprennent
+tous les ordres : les permissions et modules interactifs demandent des cibles
+explicites. Aucune demande partiellement comprise n'est exécutée en cachette.
+
 ## Nouveauté 0.5.19 : cahiers des charges jusqu'à 50 000 caractères
 
 Dans **Admin Control Windows → Discord Pilot**, tu peux désormais coller une
