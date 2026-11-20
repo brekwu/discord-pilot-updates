@@ -19,6 +19,30 @@ puis redémarre l'application. Tes données restent dans
 `%LOCALAPPDATA%\DiscordPilot\`. Si Windows bloque la mise à jour,
 le diagnostic se trouve dans `%LOCALAPPDATA%\DiscordPilot\updater.log`.
 
+## Nouveauté 0.5.19 : cahiers des charges jusqu'à 50 000 caractères
+
+Dans **Admin Control Windows → Discord Pilot**, tu peux désormais coller une
+demande de **50 000 caractères maximum**. Le compteur indique l'espace restant.
+Les plans validés peuvent contenir jusqu'à **200 actions** ; une configuration
+structurée en listes de rôles, catégories et salons est analysée sans Ollama.
+Les demandes complexes sont découpées en sections pour les petits modèles
+locaux, avec un contexte Discord ciblé et les consignes globales de
+préservation du serveur transmises à chaque section. Une section d'action non
+comprise bloque **l'ensemble** du brouillon ; les autres étapes ne partent pas
+silencieusement sur le serveur.
+
+Un brouillon peut créer des salons et rôles *déjà présents* : leur existence est
+vérifiée au moment de l'exécution et ils sont ignorés si leur nom et leur
+catégorie correspondent. Les permissions et automatisations ne sont jamais
+devinées. Le modèle ne sait pas exécuter une opération Discord absente du
+catalogue ; il demande alors de préciser ou de passer par un formulaire.
+
+La préparation **n'applique aucune modification Discord** : relis le serveur,
+les permissions et les actions puis confirme. Les tickets interactifs et
+les automatisations locales ne répondent que lorsque Discord Pilot est lancé
+et que le bot est connecté. Les tests automatiques valident la préparation et
+les refus de demandes incomplètes, pas toutes les formulations du langage.
+
 ## Nouveauté 0.5.18 : préparateur de demandes
 
 Le studio comprend maintenant la demande naturelle « Modifie les rôles pour les

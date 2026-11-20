@@ -39,12 +39,16 @@ from panel_planning import (complete_panel_plan, direct_panel_plan,
                             publication_requested)
 from plan_runtime import (direct_permission_plan, explicit_permission_intent,
                           permission_action_is_authorized, set_module_config)
-from planner import (DANGEROUS_ACTIONS, MODEL_PLAN_SCHEMA, PRESETS, SYSTEM_PROMPT, description,
+from planner import (DANGEROUS_ACTIONS, MODEL_PLAN_SCHEMA, MAX_PLAN_ACTIONS, PRESETS, SYSTEM_PROMPT, description,
                      channel_role_configuration_request, collapse_old_clarifications, community_automation_plan,
                      default_creation_plan, direct_lock_writing_plan, local_parse,
                      norm, parse_ollama_decision, resolve_lock_targets,
                      understood_request, writing_restriction_requested,
                      validate_actions)
+from long_requests import (MAX_REQUEST_CHARS, MODEL_SECTION_CHARS, actionable_section,
+                           deletion_is_authorized, focused_server_context, global_protections,
+                           merge_actions, request_sections,
+                           structured_creation_plan)
 from storage import State, load_token, remove_token, save_token
 from updater import (MAX_EXE_SIZE, MAX_ZIP_SIZE, RESTART_UPDATE_CODE, inspect_manifest,
                      inspect_zip, pending_update, read_remote, read_version,
@@ -1544,6 +1548,9 @@ async def api_update_apply(request):
 
 def supported_local_plan(prompt: str) -> list[dict]:
     """Compose several individually understood clauses without dropping any."""
+    structured = structured_creation_plan(prompt)
+    if structured:
+        return structured
     # A complete, explicit read-only request is handled before the optional AI.
     writing = direct_lock_writing_plan(prompt)
     if writing and not re.search(r"[;\n]|\b(?:puis|ensuite|apres|après|et\s+(?:cree|crée|supprime|renomme|active))\b", prompt, re.I):
@@ -1581,9 +1588,29 @@ def supported_local_plan(prompt: str) -> list[dict]:
         if not parsed:
             return []  # A partial plan is worse than a clarification.
         actions.extend(parsed)
-        if len(actions) > 40:
+        if len(actions) > MAX_PLAN_ACTIONS:
             return []
     return complete_panel_plan(prompt, validate_actions(actions))
+
+
+def local_long_plan(prompt: str) -> list[dict]:
+    """Try a complete section-by-section deterministic plan before Ollama."""
+    parts = []
+    last_heading = ""
+    for section in request_sections(prompt):
+        for line in section.splitlines():
+            if re.match(r"(?i)^\s*(?:#{1,6}\s*)?(?:cat[eé]gorie\s*[:—-]|r[oô]les?\s*[:：]?\s*$)", line):
+                last_heading = line.strip()[:150]
+        augmented = section
+        if last_heading and section.lstrip().startswith(("- ", "• ", "* ")):
+            augmented = last_heading + "\n" + section
+        if not actionable_section(augmented):
+            continue
+        actions = supported_local_plan(augmented)
+        if not actions:
+            return []
+        parts.append(actions)
+    return merge_actions(parts) if parts else []
 
 
 def planning_context(guild_id: str) -> dict:
@@ -1684,6 +1711,53 @@ async def ollama_plan(prompt: str, model: str, context: dict | None = None) -> t
     return [], None
 
 
+async def ollama_long_plan(prompt: str, model: str, context: dict | None = None) -> tuple[list[dict], str | None]:
+    """Plan all actionable blocks, or refuse the *whole* request.
+
+    Each block fits a small local model's context. No block, action or model
+    refusal is silently dropped. The entire request remains in the draft.
+    """
+    sections = request_sections(prompt)
+    parts = []
+    last_heading = ""
+    protections = global_protections(prompt)
+    for index, section in enumerate(sections, 1):
+        for line in section.splitlines():
+            if re.match(r"(?i)^\s*(?:#{1,6}\s*)?(?:cat[eé]gorie\s*[:—-]|r[oô]les?\s*[:：]?\s*$)", line):
+                last_heading = line.strip()[:150]
+        augmented = section
+        if last_heading and section.lstrip().startswith(("- ", "• ", "* ")):
+            augmented = last_heading + "\n" + section
+        if not actionable_section(augmented):
+            continue
+        local_actions = supported_local_plan(augmented)
+        if local_actions:
+            parts.append(local_actions)
+            continue
+        instruction = (
+            f"Section {index}/{len(sections)} d'un cahier des charges Discord. "
+            "Crée uniquement les opérations explicitement demandées dans CETTE section. "
+            "Une section descriptive ne demande aucune action. "
+            "Si un élément n'est pas réalisable avec les actions autorisées, "
+            "demande une précision au lieu de produire un plan partiel. "
+            "Les autres sections seront analysées séparément.\n" +
+            ("Contraintes globales à respecter :\n" + protections + "\n" if protections else "") +
+            "\n" + augmented
+        )
+        actions, question = await ollama_plan(instruction, model, focused_server_context(context, section))
+        if not actions:
+            location = f"section {index}/{len(sections)}"
+            detail = question or "les actions demandées ne sont pas toutes prises en charge"
+            return [], f"Je n'ai pas pu traiter la {location} ({detail}). Aucune modification n'a été effectuée."
+        parts.append(actions)
+    if not parts:
+        return [], "La demande ne contient aucune opération Discord clairement réalisable."
+    try:
+        return merge_actions(parts), None
+    except ValueError as exc:
+        return [], str(exc)
+
+
 def plan_clarification(prompt: str, model_question: str | None = None) -> dict:
     """A safe, editable next step when no supported action was produced."""
     requested = norm(prompt)
@@ -1717,8 +1791,9 @@ async def api_plan(request):
     data = await body_json(request)
     guild_id = require_id(data.get("guild_id"))
     raw_prompt = data.get("prompt", "")
-    if not isinstance(raw_prompt, str) or not 3 <= len(raw_prompt.strip()) <= 8000:
-        raise ValueError("Décris ta demande (3 à 8 000 caractères).")
+    if (not isinstance(raw_prompt, str) or len(raw_prompt) > MAX_REQUEST_CHARS
+            or len(raw_prompt.strip()) < 3):
+        raise ValueError("Décris ta demande (3 à 50 000 caractères).")
     prompt = collapse_old_clarifications(raw_prompt)
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
@@ -1730,6 +1805,8 @@ async def api_plan(request):
     # An explicit, understood command must go straight to a draft. Never let
     # an optional model turn it into a repeated clarification dialog.
     actions = supported_local_plan(prompt)
+    if not actions and len(prompt) > MODEL_SECTION_CHARS:
+        actions = local_long_plan(prompt)
     used = "local"
     model_question = None
     if not actions and mode != "local":
@@ -1741,7 +1818,10 @@ async def api_plan(request):
             if chosen not in models:
                 raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
             try:
-                actions, model_question = await ollama_plan(prompt, chosen, planning_context(guild_id))
+                if len(prompt) > MODEL_SECTION_CHARS:
+                    actions, model_question = await ollama_long_plan(prompt, chosen, planning_context(guild_id))
+                else:
+                    actions, model_question = await ollama_plan(prompt, chosen, planning_context(guild_id))
                 used = f"ollama:{chosen}"
             except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
                 raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
@@ -1769,7 +1849,7 @@ async def api_plan(request):
                 return web.json_response({"needs_clarification": True, "question": question,
                                           "message": "Aucune modification n'a été effectuée.",
                                           "examples": ["Mets #bienvenue en lecture seule"]})
-    if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not re.search(r"\b(?:supprim\w*|effac\w*|retir\w*|delete|enlev\w*)\b", norm(prompt)):
+    if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not deletion_is_authorized(prompt):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
     plan = STATE.add(guild_id, prompt.strip(), actions, used,
                      interpretation=understood_request(actions))

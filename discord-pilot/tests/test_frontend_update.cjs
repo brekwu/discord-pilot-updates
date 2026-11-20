@@ -9,6 +9,10 @@ const vm = require("node:vm");
 // or external packages are necessary to regression-test the reconnect logic.
 const source = fs.readFileSync(path.join(__dirname, "..", "web", "app.js"), "utf8")
   .replace(/\binit\(\);\s*$/, "");
+const html = fs.readFileSync(path.join(__dirname, "..", "web", "index.html"), "utf8");
+assert.match(html, /id="requestText"[^>]*maxlength="50000"/, "long requests must fit in the real textarea");
+assert.match(html, /id="requestLength"/, "show a visible character counter");
+assert.doesNotMatch(source, /dépasse 8 000 caractères/, "old 8k validation must be removed");
 
 async function simulateUpdate({portChanged}) {
   const redirects = [];
@@ -81,7 +85,7 @@ async function testFullMicrophoneLifecycle() {
     voiceButton: {disabled: false, textContent: "", classList: {add() {}, remove() {}}},
     voiceStatus: {hidden: true, textContent: ""},
     voicePreview: {hidden: true, src: ""},
-    requestText: {value: "", maxLength: 8000, dispatchEvent() {}},
+    requestText: {value: "", maxLength: 50000, dispatchEvent() {}},
   };
   let sent = null;
   let decodedBytes = 0;

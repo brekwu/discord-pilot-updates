@@ -23,6 +23,11 @@ ACTION_TYPES = {
     "publish_ticket_panel", "publish_application_panel",
 }
 
+# A complete server build can require far more than forty operations. This is
+# the maximum size of a *reviewable* plan, not the size of an Ollama response.
+MAX_PLAN_ACTIONS = 200
+MAX_MODEL_ACTIONS = 40
+
 ACTION_LABELS = {
     "create_category": "Créer la catégorie",
     "create_text_channel": "Créer le salon textuel",
@@ -225,8 +230,8 @@ def understood_request(actions: list[dict]) -> str:
 
 
 def validate_actions(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list) or not value or len(value) > 40:
-        raise ValueError("Le plan doit contenir entre 1 et 40 actions.")
+    if not isinstance(value, list) or not value or len(value) > MAX_PLAN_ACTIONS:
+        raise ValueError(f"Le plan doit contenir entre 1 et {MAX_PLAN_ACTIONS} actions.")
     verified = []
     for item in value:
         if not isinstance(item, dict) or item.get("type") not in ACTION_TYPES:
@@ -424,7 +429,7 @@ send_message {type,channel,content} (message explicite uniquement)
 make_private {type,name,role} (role existant ou à créer; aucun accès pour @everyone)
 delete_channel {type,name} (uniquement si demandé explicitement)
 delete_role {type,name} (uniquement si demandé explicitement)
-Pour les catégories, crée-les avant les salons ; crée les rôles avant les actions qui les utilisent. Utilise un plan précis, 40 actions maximum.
+Pour les catégories, crée-les avant les salons ; crée les rôles avant les actions qui les utilisent. Maximum 40 actions par réponse ; les longues demandes sont découpées par l'application.
 Exemple : demande « Crée un salon annonces et un rôle Membre » ->
 {"actions":[{"type":"create_text_channel","name":"annonces"},{"type":"create_role","name":"Membre"}]}.
 Ne confonds pas activation d'une fonctionnalité avancée et création d'un salon.
@@ -443,7 +448,7 @@ MODEL_PLAN_SCHEMA = {
     "type": "object",
     "properties": {
         "actions": {
-            "type": "array", "maxItems": 40,
+            "type": "array", "maxItems": MAX_MODEL_ACTIONS,
             "items": {
                 "type": "object",
                 "properties": {

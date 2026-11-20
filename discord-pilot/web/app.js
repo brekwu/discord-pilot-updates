@@ -14,6 +14,11 @@ function dom(tag, className, value) { const node = document.createElement(tag); 
 function replace(node, children) { node.replaceChildren(...children); }
 function abbreviate(s) { return (s || "S").split(/\s+/).filter(Boolean).slice(0, 2).map(x => x[0]).join("").toUpperCase(); }
 function time(iso) { try { return new Date(iso).toLocaleString("fr-FR", {dateStyle: "medium", timeStyle: "short"}); } catch { return ""; } }
+function updateRequestLength() {
+  const count = $("requestText").value.length;
+  const indicator = $("requestLength");
+  if (indicator) indicator.textContent = `${count.toLocaleString("fr-FR")} / 50 000 caractères`;
+}
 
 async function request(path, options = {}) {
   const init = { ...options, headers: { ...(options.headers || {}), "X-Pilot-CSRF": app.csrf } };
@@ -322,7 +327,7 @@ function renderHistory() {
   if (!app.selected || !app.history.length) { replace($("historyContent"), [dom("p", "empty", "Aucune demande enregistrée pour ce serveur.")]); return; }
   replace($("historyContent"), app.history.map(p => {
     const article = dom("article", "history-item"); const head = dom("div", "history-head");
-    const name = dom("div"); name.append(dom("strong", "", p.prompt), dom("small", "", `${time(p.created_at)} · ${p.mode} · ${p.actions.length} action(s)`));
+    const name = dom("div"); name.append(dom("strong", "", p.prompt.length > 220 ? p.prompt.slice(0, 220) + "…" : p.prompt), dom("small", "", `${time(p.created_at)} · ${p.mode} · ${p.actions.length} action(s)`));
     const badge = dom("span", `pill ${p.status === "completed" ? "success" : ["failed", "partial"].includes(p.status) ? "failed" : ""}`, stateName(p.status));
     head.append(name, badge); article.append(head);
     const details = dom("details"); details.append(dom("summary", "", "Afficher les actions et résultats"));
@@ -786,10 +791,17 @@ function testDiscord() {
 
 async function createPlan() {
   if (!app.selected) return toast("Sélectionne un serveur.", true);
+  if (app.busy) return;
+  const requestedGuild = app.selected;
   const prompt = $("requestText").value.trim(); if (!prompt) return toast("Décris les changements à effectuer.", true);
+  if (prompt.length > 50000) return toast("La limite est de 50 000 caractères.", true);
   app.busy = true; $("generateButton").textContent = "Analyse de la demande…"; renderOverview();
   try {
     const data = await request("/api/plan", {data: {guild_id: app.selected, prompt, mode: $("modeSelect").value, model: $("modelSelect").value || undefined}});
+    if (app.selected !== requestedGuild) {
+      toast("Le plan a été enregistré sur le serveur d'origine. Rouvre ce serveur pour le retrouver.");
+      return;
+    }
     if (data.configuration_required === "channel_role_access") {
       toast(data.message);
       await openChannelRolePermissions();
@@ -810,14 +822,16 @@ async function createPlan() {
           if (revised.length < 3 || (revised === prompt && !extra))
             throw new Error("Reformule la demande ou réponds à la question de l'IA.");
           const full = extra ? `${revised}\nPrécision : ${extra}` : revised;
-          if (full.length > 8000) throw new Error("Ta demande dépasse 8 000 caractères.");
+          if (full.length > 50000) throw new Error("Ta demande dépasse 50 000 caractères.");
           $("requestText").value = full;
+          updateRequestLength();
           setTimeout(() => createPlan(), 0);
         }});
       return;
     }
     app.plan = data.plan;
     $("requestText").value = data.plan.prompt; // Remove old clarification lines.
+    updateRequestLength();
     renderPlan(); await loadHistory();
     $("planPanel").scrollIntoView({behavior: "smooth", block: "nearest"}); toast("Plan créé. Vérifie les actions avant de valider.");
   } catch (e) { toast(e.message, true); }
@@ -1072,6 +1086,7 @@ async function init() {
   $("refreshButton").onclick = () => { loadDetails(); loadHistory(); toast("Actualisation lancée."); };
   $("structureRefresh").onclick = loadDetails;
   $("generateButton").onclick = createPlan;
+  $("requestText").addEventListener("input", updateRequestLength);
   $("testDiscordButton").onclick = testDiscord;
   $("voiceButton").onclick = toggleVoiceRecording;
   $("executeButton").onclick = executePlan;
@@ -1087,7 +1102,8 @@ async function init() {
   $("giveawayForm").onsubmit = e => { e.preventDefault(); createInteractive("giveaway"); };
   $("quizForm").onsubmit = e => { e.preventDefault(); createInteractive("quiz"); };
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => switchTab(t.dataset.tab));
-  document.querySelectorAll("[data-example]").forEach(t => t.onclick = () => { $("requestText").value = t.dataset.example; switchTab("studio"); $("requestText").focus(); });
+  document.querySelectorAll("[data-example]").forEach(t => t.onclick = () => { $("requestText").value = t.dataset.example; updateRequestLength(); switchTab("studio"); $("requestText").focus(); });
+  updateRequestLength();
   await bootstrap(); renderPresets(); await loadCatalog(); await models();
   backgroundUpdateCheck();
   setInterval(async () => {
