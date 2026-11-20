@@ -16,7 +16,12 @@ from planner import MAX_PLAN_ACTIONS, norm, validate_actions
 MAX_REQUEST_CHARS = 50_000
 MODEL_SECTION_CHARS = 3_600
 
-_HEADING = re.compile(r"^\s*(?:#{1,6}\s+|={4,}|[-=]{5,}\s*$|(?:cat[eé]gorie|section|p[oô]le)\s*[:—-])", re.I)
+_HEADING = re.compile(
+    r"^\s*(?:#{1,6}\s+|={4,}|[-=]{5,}\s*$|"
+    r"(?:[^\w\s:]{1,8}\s*)?(?:cat[eé]gorie|section|p[oô]le|r[oô]les?(?:\s+[àa]\s+cr[eé]er)?|"
+    r"contexte|objectif|important|pr[eé]sentation|r[oô]le)\s*[:—-])",
+    re.I,
+)
 _INTENT = re.compile(
     r"\b(?:cr[eé]e\w*|ajoute\w*|rajoute\w*|configur\w*|"
     r"activ\w*|d[eé]sactiv\w*|install\w*|publi\w*|"
@@ -150,9 +155,15 @@ def merge_actions(parts: list[list[dict]]) -> list[dict]:
     return validate_actions(combined) if combined else []
 
 
-_ROLE_HEADER = re.compile(r"^(?:#{1,6}\s*)?(?:🎭\s*|🛡️\s*|👑\s*)?r[oô]les?(?:\s+(?:[àa]\s+cr[eé]er|discord|esport))?\s*[:：]?$", re.I)
-_CATEGORY_HEADER = re.compile(r"^(?:#{1,6}\s*)?(?:📁\s*|📂\s*)?cat[eé]gorie\s*[:：—-]\s*(.+)$", re.I)
-_CHANNEL_HEADER = re.compile(r"^(?:#{1,6}\s*)?(?:salons?|channels?)\s*[:：]?$", re.I)
+_DECORATION = r"(?:[^\w\s:]{1,8}\s*)?"
+_ROLE_HEADER = re.compile(
+    rf"^(?:#{{1,6}}\s*)?{_DECORATION}r[oô]les?"
+    r"(?:\s+(?:[àa]\s+cr[eé]er|discord|esport))?\s*[:：]?$", re.I)
+_CATEGORY_HEADER = re.compile(
+    rf"^(?:#{{1,6}}\s*)?{_DECORATION}cat[eé]gorie\s*[:：—-]\s*(.+)$", re.I)
+_CHANNEL_HEADER = re.compile(
+    rf"^(?:#{{1,6}}\s*)?{_DECORATION}(?:salons?|channels?)"
+    r"(?:\s+(?:textuels?|vocaux?|vocals?))?\s*[:：]?$", re.I)
 _BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.+?)\s*$")
 
 
@@ -164,6 +175,7 @@ def structured_creation_plan(prompt: str) -> list[dict]:
     """
     mode = None
     category = None
+    channel_kind = "create_text_channel"
     actions = []
     for raw in prompt.splitlines():
         line = raw.strip()
@@ -179,9 +191,12 @@ def structured_creation_plan(prompt: str) -> list[dict]:
                 return []
             actions.append({"type": "create_category", "name": category})
             mode = "channels"
+            channel_kind = "create_text_channel"
             continue
         if _CHANNEL_HEADER.fullmatch(line) and category:
             mode = "channels"
+            channel_kind = ("create_voice_channel" if re.search(r"\b(?:vocaux?|vocals?)\b", line, re.I)
+                            else "create_text_channel")
             continue
         item = _BULLET.fullmatch(line)
         if not item or mode not in {"roles", "channels"}:
@@ -189,8 +204,8 @@ def structured_creation_plan(prompt: str) -> list[dict]:
         name = item.group(1).strip().strip("`* ")
         if mode == "channels":
             name = name.lstrip("#").strip()
-            kind = "create_voice_channel" if name.lower().startswith("vocal :") else "create_text_channel"
-            if kind == "create_voice_channel":
+            kind = "create_voice_channel" if name.lower().startswith("vocal :") else channel_kind
+            if name.lower().startswith("vocal :"):
                 name = name.split(":", 1)[1].strip()
             actions.append({"type": kind, "name": name, "category": category})
         else:

@@ -42,15 +42,22 @@ class StructuredLongRequestTests(unittest.TestCase):
         stream = BytesIO()
         with ZipFile(stream, "w") as archive:
             for filename in sorted(REQUIRED | newer):
-                content = json.dumps({"version": "0.5.19"}) if filename == "version.json" else filename
+                content = json.dumps({"version": "0.5.20"}) if filename == "version.json" else filename
                 archive.writestr(f"discord-pilot/{filename}", content)
-        contents = inspect_zip(stream.getvalue(), "0.5.19")
+        contents = inspect_zip(stream.getvalue(), "0.5.20")
         self.assertTrue(newer.issubset(contents))
 
     def test_50k_contract_and_model_chunk_limit(self):
         self.assertEqual(MAX_REQUEST_CHARS, 50_000)
         self.assertEqual(MAX_PLAN_ACTIONS, 200)
         self.assertEqual(MODEL_PLAN_SCHEMA["properties"]["actions"]["maxItems"], 40)
+
+    def test_default_model_favors_chat_model_over_embedding_and_tiny_models(self):
+        models = ["nomic-embed-text:latest", "qwen2.5:1.5b", "qwen2.5:7b", "llama3:8b"]
+        ordered = app.preferred_chat_models(models)
+        self.assertEqual(ordered[0], "llama3:8b")
+        self.assertNotIn("nomic-embed-text:latest", ordered)
+        self.assertEqual(app.preferred_chat_models(["bge-m3:latest"]), [])
 
     def test_full_esports_spec_is_116_actions_without_ollama(self):
         actions = structured_creation_plan(esports_spec())
@@ -66,6 +73,18 @@ class StructuredLongRequestTests(unittest.TestCase):
         actions = structured_creation_plan("Rôles:\n- Recruteur\nCATÉGORIE : 🎮 VXK – Fortnite\n- #actualités\n- vocal : Staff")
         self.assertEqual([a["type"] for a in actions], ["create_category", "create_role", "create_text_channel", "create_voice_channel"])
         self.assertEqual(actions[-1]["name"], "Staff")
+
+    def test_emoji_headings_and_explicit_voice_room_group(self):
+        prompt = ("🎭 Rôles à créer :\n- 👑 Fondateur\n- Coach\n"
+                  "📁 CATÉGORIE : VEXORA ESPORTS\nSalons textuels :\n"
+                  "- #actualités\n- #résultats\n"
+                  "📁 CATÉGORIE : ROCKET LEAGUE\nSalons vocaux :\n- 🎧 Vocal équipe")
+        actions = structured_creation_plan(prompt)
+        self.assertEqual(len(actions), 7)
+        self.assertEqual([a["type"] for a in actions[:4]],
+                         ["create_category", "create_category", "create_role", "create_role"])
+        self.assertEqual(actions[-1], {"type": "create_voice_channel", "name": "🎧 Vocal équipe", "category": "ROCKET LEAGUE"})
+        self.assertEqual(len(app.local_long_plan(prompt)), 7)
 
     def test_duplicate_creations_coalesce_but_messages_do_not(self):
         parts = [[{"type": "create_category", "name": "Accueil"},
@@ -109,6 +128,19 @@ class StructuredLongRequestTests(unittest.TestCase):
         prompt = ("RÔLE : expert Discord.\nIMPORTANT : Ne supprime aucun salon existant.\n"
                   "CONTEXTE : La structure rassemble quatre jeux.\n" + esports_spec())
         self.assertEqual(len(app.local_long_plan(prompt)), 116)
+
+    def test_short_spec_keeps_roles_and_channels_after_intro(self):
+        prompt = ("RÔLE : expert en administration Discord.\n"
+                  "IMPORTANT : Ne supprime aucun salon existant.\n"
+                  "Rôles à créer :\n- Manager\n- Coach\n"
+                  "CATÉGORIE : VEXORA ESPORTS\nSalons :\n- #actualités\n- #résultats\n"
+                  "CATÉGORIE : ROCKET LEAGUE\nSalons :\n- #roster\n- #discussion")
+        expected = app.local_long_plan(prompt)
+        self.assertEqual(len(expected), 8)
+        self.assertEqual({a["name"] for a in expected if a["type"] == "create_role"},
+                         {"Manager", "Coach"})
+        self.assertEqual({a["name"] for a in expected if a["type"] == "create_category"},
+                         {"VEXORA ESPORTS", "ROCKET LEAGUE"})
 
     def test_context_filters_unrelated_rooms_but_keeps_mentioned_ones(self):
         context = {"connected": True, "server": {"name": "VexoraKey",
@@ -187,6 +219,19 @@ class LargeRequestAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["plan"]["status"], "draft")
         self.assertEqual(result["plan"]["guild_id"], "1567347687379050727")
         self.assertEqual(result["plan"]["results"], [])
+
+    async def test_short_multi_section_spec_works_without_ollama(self):
+        prompt = ("RÔLE : expert Discord.\nIMPORTANT : Ne supprime aucun salon.\n"
+                  "Rôles à créer :\n- Coach\n- Manager\n"
+                  "CATÉGORIE : VEXORA ESPORTS\n- #actualités\n- #résultats\n"
+                  "CATÉGORIE : VALORANT\n- #roster\n- #stratégie")
+        with patch.object(app, "ollama_models", side_effect=AssertionError("Ollama must not run")):
+            response = await self.post_auto(prompt)
+        self.assertEqual(response.status, 200)
+        result = await response.json()
+        self.assertEqual(len(result["plan"]["actions"]), 8)
+        self.assertEqual(result["plan"]["mode"], "local")
+        self.assertEqual(result["plan"]["status"], "draft")
 
     async def test_50k_is_accepted_50001_rejected(self):
         prompt = "Rôles:\n- Membre" + (" " * (MAX_REQUEST_CHARS - len("Rôles:\n- Membre")))

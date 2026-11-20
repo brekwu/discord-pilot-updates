@@ -1406,6 +1406,35 @@ async def api_export(request):
                         headers={"Content-Disposition": f'attachment; filename="discord-pilot-{guild_id}.json"'})
 
 
+def preferred_chat_models(models: list[str]) -> list[str]:
+    """Never pick an embedding model for action planning in automatic mode.
+
+    Ollama's /api/tags ordering is not a quality ranking. A small chat model
+    can be useful for simple tasks, but a 7–9B instruction model is the safer
+    default for a complex French Discord specification on a consumer GPU.
+    """
+    def rank(name: str) -> tuple[int, int, str]:
+        model = name.casefold()
+        match = re.search(r"(?:^|[:\-])([0-9]+(?:\.[0-9]+)?)b(?:$|[-_])", model)
+        size = float(match.group(1)) if match else 0
+        if 6 <= size <= 9:
+            size_rank = 0
+        elif 9 < size <= 15:
+            size_rank = 1
+        elif size > 15:
+            size_rank = 3
+        elif size:
+            size_rank = 2
+        else:
+            size_rank = 2
+        family_rank = 0 if re.search(r"qwen|llama|mistral|gemma|phi", model) else 1
+        return (size_rank, family_rank, model)
+
+    chat = [name for name in models if not re.search(
+        r"embed|embedding|nomic|bge[-_]|mxbai|snowflake[-_]arctic", name, re.I)]
+    return sorted(chat, key=rank)
+
+
 async def ollama_models():
     timeout = aiohttp.ClientTimeout(total=2)
     try:
@@ -1413,7 +1442,9 @@ async def ollama_models():
             async with session.get("http://127.0.0.1:11434/api/tags") as response:
                 response.raise_for_status()
                 data = await response.json()
-                return [v["name"] for v in data.get("models", []) if isinstance(v, dict) and v.get("name")]
+                names = [v["name"] for v in data.get("models", [])
+                         if isinstance(v, dict) and isinstance(v.get("name"), str)]
+                return preferred_chat_models(names)
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, OSError):
         return []
 
@@ -1805,7 +1836,11 @@ async def api_plan(request):
     # An explicit, understood command must go straight to a draft. Never let
     # an optional model turn it into a repeated clarification dialog.
     actions = supported_local_plan(prompt)
-    if not actions and len(prompt) > MODEL_SECTION_CHARS:
+    sections = request_sections(prompt) if "\n" in prompt else [prompt]
+    # Document structure matters even below 3,600 characters.  A short spec
+    # with introductory rules + roles + categories was previously rejected
+    # as one command, or omitted its role section.
+    if not actions and (len(prompt) > MODEL_SECTION_CHARS or len(sections) > 1):
         actions = local_long_plan(prompt)
     used = "local"
     model_question = None
@@ -1818,13 +1853,18 @@ async def api_plan(request):
             if chosen not in models:
                 raise ValueError("Le modèle demandé n'est pas installé dans Ollama.")
             try:
-                if len(prompt) > MODEL_SECTION_CHARS:
+                if len(prompt) > MODEL_SECTION_CHARS or len(sections) > 1:
                     actions, model_question = await ollama_long_plan(prompt, chosen, planning_context(guild_id))
                 else:
                     actions, model_question = await ollama_plan(prompt, chosen, planning_context(guild_id))
                 used = f"ollama:{chosen}"
             except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
                 raise ValueError(f"Erreur de génération Ollama : {type(exc).__name__}. Réessaie.") from exc
+        elif not actions:
+            model_question = ("Aucun modèle IA de conversation n'est disponible dans Ollama. "
+                              "Les commandes simples et les listes structurées fonctionnent hors IA, "
+                              "mais cette demande nécessite un modèle local de conversation. "
+                              "Installe par exemple qwen2.5:7b, puis réessaie.")
     if not actions:
         return web.json_response(plan_clarification(prompt, model_question))
     actions = complete_panel_plan(prompt, actions)

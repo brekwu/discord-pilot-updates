@@ -433,7 +433,9 @@ async function bootstrap(quiet = false) {
 async function models() {
   try {
     const data = await request("/api/models"); app.models = data.models;
-    $("ollamaStatus").textContent = data.available ? `✦ IA locale active · ${data.models.length} modèle(s)` : "✓ Assistant intégré actif : commandes courantes sans installation";
+    $("ollamaStatus").textContent = data.available
+      ? `✦ IA locale détectée · ${data.models.length} modèle(s) · la précision dépend du modèle choisi`
+      : "⚠ Aucun modèle IA local détecté : commandes simples et listes structurées uniquement. Les demandes complexes nécessitent Ollama et un modèle de conversation.";
     replace($("modelSelect"), data.models.map(name => { const opt = dom("option", "", name); opt.value = name; return opt; }));
     $("modelSelect").hidden = !data.available || $("modeSelect").value === "local";
   } catch { $("ollamaStatus").textContent = "Mode sans IA disponible"; }
