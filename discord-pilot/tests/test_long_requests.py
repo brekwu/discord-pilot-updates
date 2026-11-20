@@ -2,8 +2,11 @@
 
 import tempfile
 import unittest
+import json
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from zipfile import ZipFile
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -14,6 +17,7 @@ from long_requests import (MAX_REQUEST_CHARS, actionable_section,
                            structured_creation_plan)
 from planner import MAX_PLAN_ACTIONS, MODEL_PLAN_SCHEMA, validate_actions
 from storage import State
+from updater import REQUIRED, inspect_zip
 
 
 def esports_spec(categories=11, channels=73, roles=32):
@@ -27,6 +31,22 @@ def esports_spec(categories=11, channels=73, roles=32):
 
 
 class StructuredLongRequestTests(unittest.TestCase):
+    def test_source_update_accepts_all_new_runtime_modules(self):
+        # Windows EXE and the source ZIP updater must both be able to install
+        # the planner and its supporting runtime modules.
+        newer = {
+            "long_requests.py", "plan_runtime.py", "panel_actions.py",
+            "panel_planning.py", "conversational_workflows.py",
+            "discord_diagnostics.py", "frozen_updater.ps1",
+        }
+        stream = BytesIO()
+        with ZipFile(stream, "w") as archive:
+            for filename in sorted(REQUIRED | newer):
+                content = json.dumps({"version": "0.5.19"}) if filename == "version.json" else filename
+                archive.writestr(f"discord-pilot/{filename}", content)
+        contents = inspect_zip(stream.getvalue(), "0.5.19")
+        self.assertTrue(newer.issubset(contents))
+
     def test_50k_contract_and_model_chunk_limit(self):
         self.assertEqual(MAX_REQUEST_CHARS, 50_000)
         self.assertEqual(MAX_PLAN_ACTIONS, 200)
