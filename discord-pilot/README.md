@@ -19,6 +19,29 @@ puis redémarre l'application. Tes données restent dans
 `%LOCALAPPDATA%\DiscordPilot\`. Si Windows bloque la mise à jour,
 le diagnostic se trouve dans `%LOCALAPPDATA%\DiscordPilot\updater.log`.
 
+## 0.5.21 — Systèmes interactifs et vérification des résultats
+
+Dans Discord Pilot → Studio, tu peux demander par exemple :
+
+- « Crée un système complet de tickets avec bouton. Salon du panneau : #assistance, catégorie : TICKETS, rôle staff : Support. »
+- « Mets en place un système complet de candidatures avec bouton. Salon du panneau : #postuler, salon de suivi : #suivi-staff, rôle staff : Recruteur, catégorie : RECRUTEMENT. »
+
+L'application prépare un **brouillon à valider** qui crée les ressources
+nommées manquantes, configure le module Discord local puis publie le bouton.
+Les salons staff nouvellement créés sont **privés dès leur création**.
+Un salon staff existant mais public provoque un blocage plutôt qu'une
+publication dangereuse. L'application n'installe pas d'IA cloud ni de bot
+supplémentaire. Les boutons ne répondent que pendant la connexion du bot local.
+
+À la fin d'un plan confirmé, Discord Pilot relit les salons et rôles via
+l'API Discord et vérifie les opérations prises en charge (créations,
+renommages, descriptions, permissions, messages et présence des boutons).
+Les automatisations enregistrées sont marquées « local uniquement » : leurs
+déclencheurs doivent encore être testés en situation. Si l'API ne répond pas,
+le résultat est « non vérifié », jamais présenté comme confirmé. Un écart de
+configuration fait passer le plan en « partiel ». Aucun test local ne garantit
+que toutes les formulations en langage naturel seront comprises.
+
 ## Correction 0.5.20 : interprétation des demandes structurées
 
 Une demande structurée courte passe désormais par l'analyse des sections :
