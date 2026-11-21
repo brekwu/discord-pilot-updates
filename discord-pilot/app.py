@@ -35,7 +35,7 @@ from conversational_workflows import (batch_module_plan, guided_workflow_plan,
                                       server_preset_plan)
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from panel_actions import publish_panel
-from system_recipes import recipe_plan, recipe_kind, recipe_publication_authorized
+from system_recipes import recipe_plan, recipe_kind, recipe_publication_authorized, uncovered_requirements
 from plan_verification import verify_plan
 from panel_planning import (complete_panel_plan, direct_panel_plan,
                             publication_requested)
@@ -1910,6 +1910,13 @@ async def api_plan(request):
                                           "examples": ["Mets #bienvenue en lecture seule"]})
     if any(a["type"] in DANGEROUS_ACTIONS for a in actions) and not deletion_is_authorized(prompt):
         raise ValueError("Suppression non demandée explicitement : aucune action lancée.")
+    missing = uncovered_requirements(prompt, actions)
+    if missing:
+        return web.json_response({"needs_clarification": True,
+                                  "question": ("Certaines parties du cahier des charges n'ont pas été converties "
+                                               "en actions : " + " ".join(missing) +
+                                               " Découpe ces fonctions en demandes séparées ou précise les ressources."),
+                                  "message": "Plan incomplet refusé : aucune modification effectuée."})
     plan = STATE.add(guild_id, prompt.strip(), actions, used,
                      interpretation=understood_request(actions))
     return web.json_response({"plan": plan})
