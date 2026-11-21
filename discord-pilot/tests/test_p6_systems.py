@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock
 
 from system_recipes import recipe_plan, recipe_kind
 from plan_verification import verify_plan
+from discord_ops import execute_action
+from planner import norm
+import discord
 
 
 class SystemRecipesTests(unittest.TestCase):
@@ -64,6 +67,26 @@ class FakeState:
         return {"enabled": True}
     def automation_channel(self, gid, name):
         return None
+
+
+class AtomicStaffRoomTests(unittest.IsolatedAsyncioTestCase):
+    async def test_staff_room_is_private_at_creation_time(self):
+        public = SimpleNamespace(id=1, name="@everyone")
+        staff = SimpleNamespace(id=2, name="Recruteur")
+        staff.is_default = lambda: False
+        bot = SimpleNamespace(id=3)
+        room = SimpleNamespace(id=4)
+        guild = SimpleNamespace(id=123, channels=[], categories=[], roles=[public, staff], me=bot,
+                                default_role=public)
+        guild.create_text_channel = AsyncMock(return_value=room)
+        status, detail = await execute_action(guild, {
+            "type": "create_private_text_channel", "name": "suivi-staff", "role": "Recruteur"
+        }, created={"channels": {}, "roles": {norm("Recruteur"): staff}, "categories": {}})
+        self.assertEqual(status, "done")
+        kwargs = guild.create_text_channel.await_args.kwargs
+        self.assertFalse(kwargs["overwrites"][public].view_channel)
+        self.assertTrue(kwargs["overwrites"][staff].view_channel)
+        self.assertTrue(kwargs["overwrites"][bot].view_channel)
 
 
 class PlanVerificationTests(unittest.IsolatedAsyncioTestCase):
