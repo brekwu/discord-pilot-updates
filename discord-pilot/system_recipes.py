@@ -10,6 +10,10 @@ from planner import clean_name, norm, validate_actions
 
 
 def recipe_kind(prompt: str) -> str | None:
+    # Large server specifications may contain several unrelated systems.
+    # A single short blueprint must never consume an entire 50k document.
+    if len(prompt) > 1500:
+        return None
     text = norm(prompt)
     if not re.search(r"\b(?:systeme|workflow|dispositif|installation)\b", text):
         return None
@@ -99,3 +103,30 @@ def recipe_publication_authorized(prompt: str, action_type: str) -> bool:
     return (wanted == "tickets" and action_type == "publish_ticket_panel" or
             wanted == "applications" and action_type == "publish_application_panel") and bool(
         re.search(r"\b(?:boutons?|interactif|complet)\b", norm(prompt)))
+
+
+def uncovered_requirements(prompt: str, actions: list[dict]) -> list[str]:
+    """Detect explicit interactive requests that a partial creation plan omits.
+
+    This is a conservative guard, not a claim to understand arbitrary French.
+    Unknown advanced features need a named extension and live tests.
+    """
+    text = norm(prompt)
+    kinds = {a["type"] for a in actions}
+    missing = []
+    tickets = bool(re.search(
+        r"\b(?:cree\w*|creer|installe\w*|active\w*|mets?\s+en\s+place)\b.{0,130}"
+        r"\b(?:systeme\s+de\s+tickets?|tickets?\s+interactifs?)\b", text, re.S))
+    candidates = bool(re.search(
+        r"\b(?:cree\w*|creer|installe\w*|active\w*|mets?\s+en\s+place)\b.{0,130}"
+        r"\b(?:systeme\s+de\s+(?:recrutement|candidatures?)|"
+        r"panneau\s+de\s+candidatures?)\b", text, re.S))
+    if tickets and "publish_ticket_panel" not in kinds:
+        missing.append("Le système de tickets demandé n'est pas configuré et publié.")
+    if candidates and "publish_application_panel" not in kinds:
+        missing.append("Le système de candidatures demandé n'est pas configuré et publié.")
+    if ("boutons" in text and "postuler" in text and
+            all(name in text for name in ("rocket league", "fortnite", "valorant", "clash of clans"))):
+        missing.append("Les quatre boutons de candidature par jeu nécessitent un module spécifique : "
+                       "le panneau standard n'a qu'un bouton.")
+    return missing
