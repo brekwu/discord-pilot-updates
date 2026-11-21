@@ -35,6 +35,8 @@ from conversational_workflows import (batch_module_plan, guided_workflow_plan,
                                       server_preset_plan)
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from panel_actions import publish_panel
+from system_recipes import recipe_plan, recipe_kind, recipe_publication_authorized
+from plan_verification import verify_plan
 from panel_planning import (complete_panel_plan, direct_panel_plan,
                             publication_requested)
 from plan_runtime import (direct_permission_plan, explicit_permission_intent,
@@ -1829,6 +1831,23 @@ async def api_plan(request):
     mode = data.get("mode", "auto")
     if mode not in {"auto", "local", "ollama"}:
         raise ValueError("Mode d'interprétation inconnu.")
+    # Complete interactive systems need named resources and manual approval.
+    recipe = recipe_plan(prompt)
+    if recipe is not None:
+        recipe_actions, recipe_question = recipe
+        if recipe_question:
+            return web.json_response({"needs_clarification": True,
+                                      "question": recipe_question,
+                                      "message": "Aucune modification n'a été effectuée."})
+        if not all(recipe_publication_authorized(prompt, a["type"])
+                   for a in recipe_actions if a["type"].startswith("publish_")):
+            return web.json_response({"needs_clarification": True,
+                                      "question": "Demande explicitement la publication du bouton interactif.",
+                                      "message": "Aucune modification n'a été effectuée."})
+        plan = STATE.add(guild_id, prompt.strip(), recipe_actions,
+                         f"workflow:{recipe_kind(prompt)}",
+                         interpretation=understood_request(recipe_actions))
+        return web.json_response({"plan": plan})
     if channel_role_configuration_request(prompt) and not explicit_permission_intent(prompt):
         return web.json_response({"configuration_required": "channel_role_access",
                                   "message": "Choisis les salons, le rôle et les accès à autoriser/refuser. "
@@ -2019,6 +2038,11 @@ async def run_plan(plan, guild):
         plan["status"] = ("partial" if failures and (successes or approvals) else
                           "failed" if failures else
                           "authorization_required" if approvals else "completed")
+        if guild is not None:
+            plan["verification"] = await verify_plan(guild, plan, STATE)
+            if plan["verification"]["mismatch"]:
+                # A successful request is not proof that the server matches.
+                plan["status"] = "partial"
         STATE.save()
         if any(a["type"].startswith("configure_") or a["type"] == "set_module" for a in plan["actions"]):
             try:
