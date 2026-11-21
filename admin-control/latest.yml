@@ -1,8 +1,8 @@
-version: 1.27.49
+version: 1.27.50
 files:
-  - url: https://github.com/brekwu/discord-pilot-updates/releases/download/admin-control-v1.27.49/AdminControl-Setup-1.27.49.exe
-    sha512: Rk7kiPVEiNpv8na4CmZ9ijC8vAcf1cFefel33do+/G2ZBm930Hl9FcIZIfunb2PiOm/4+uGaeKhUVVPRU2r0Hg==
-    size: 96011147
-path: https://github.com/brekwu/discord-pilot-updates/releases/download/admin-control-v1.27.49/AdminControl-Setup-1.27.49.exe
-sha512: Rk7kiPVEiNpv8na4CmZ9ijC8vAcf1cFefel33do+/G2ZBm930Hl9FcIZIfunb2PiOm/4+uGaeKhUVVPRU2r0Hg==
-releaseDate: '2026-11-21T04:39:22.428Z'
+  - url: https://github.com/brekwu/discord-pilot-updates/releases/download/admin-control-v1.27.50/AdminControl-Setup-1.27.50.exe
+    sha512: 9r9fqzCmMnG4TU1tVq+UYSLay/90t15diyqDqY5NPw98XiArCdDMO4hHgN8v+hrpNW3rErp3PXVcGXS4JbHv5A==
+    size: 96015112
+path: https://github.com/brekwu/discord-pilot-updates/releases/download/admin-control-v1.27.50/AdminControl-Setup-1.27.50.exe
+sha512: 9r9fqzCmMnG4TU1tVq+UYSLay/90t15diyqDqY5NPw98XiArCdDMO4hHgN8v+hrpNW3rErp3PXVcGXS4JbHv5A==
+releaseDate: '2026-11-21T04:53:26.849Z'
