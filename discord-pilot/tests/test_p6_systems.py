@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from system_recipes import recipe_plan, recipe_kind
+from system_recipes import recipe_plan, recipe_kind, uncovered_requirements
 from plan_verification import verify_plan
 from discord_ops import execute_action
 from planner import norm
@@ -44,6 +44,14 @@ class SystemRecipesTests(unittest.TestCase):
             "Salon du panneau : #postuler, salon de suivi : #postuler, rôle staff : Recruteur.")
         self.assertEqual(actions, [])
         self.assertIn("différents", question)
+
+    def test_complex_spec_refuses_partial_panels(self):
+        text = ("Crée un salon recrutement et un système de candidatures. "
+                "Ajoute quatre boutons Postuler Rocket League, Postuler Fortnite, "
+                "Postuler Valorant, Postuler Clash of Clans.")
+        issues = uncovered_requirements(text, [{"type":"create_text_channel","name":"recrutement"}])
+        self.assertGreaterEqual(len(issues), 2)
+        self.assertIn("quatre boutons", " ".join(issues))
 
     def test_generic_commands_go_through_existing_planner(self):
         self.assertIsNone(recipe_kind("Crée un salon actualités et un rôle Support"))
