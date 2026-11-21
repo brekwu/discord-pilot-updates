@@ -44,7 +44,7 @@ async def _check(item, row, guild, state, channels, roles):
     if kind == "set_module":
         cfg = state.module(gid, item["module"])
         match = cfg.get("enabled") is (item["enabled"] == "true")
-        return ("verified" if match else "mismatch"), "Configuration enregistrée." if match else "État du module non conforme."
+        return ("local_only" if match else "mismatch"), ("Module enregistré ; son fonctionnement reste à tester en conditions réelles." if match else "État du module non conforme.")
     if kind == "configure_module":
         cfg = state.module(gid, item["module"])
         if cfg.get("enabled") is not (item["enabled"] == "true"):
