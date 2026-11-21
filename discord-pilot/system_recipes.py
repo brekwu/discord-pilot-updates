@@ -69,7 +69,7 @@ def recipe_plan(prompt: str) -> tuple[list[dict], str | None] | None:
         ]
     else:
         review = _field(prompt, (
-            r"(?:salon\s+(?:priv[eé]\s+|du\s+)?(?:suivi|staff|validation|candidatures?\s+priv[eé]es?))\s*[:=]?\s*#?([\wÀ-ÿ-]+)",
+            r"(?:salon\s+(?:priv[eé]\s+|du\s+|de\s+)?(?:suivi|staff|validation|candidatures?\s+priv[eé]es?))\s*[:=]?\s*#?([\wÀ-ÿ-]+)",
             r"\bsuivi\s+dans\s+(?:le\s+salon\s+)?#([\wÀ-ÿ-]+)",
         ))
         category = _field(prompt, (r"\bcat[eé]gorie\s*[:=]?\s*([^,;\.\n]+)",))
