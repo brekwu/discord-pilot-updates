@@ -12,7 +12,7 @@ from community_modules import MODULES
 
 
 ACTION_TYPES = {
-    "create_category", "create_text_channel", "create_voice_channel",
+    "create_category", "create_text_channel", "create_voice_channel", "create_private_text_channel",
     "create_role", "rename_channel", "rename_role", "set_topic",
     "send_message", "make_private", "lock_channel_writing", "delete_channel", "delete_role",
     "configure_welcome", "configure_farewell", "configure_invites",
@@ -32,6 +32,7 @@ ACTION_LABELS = {
     "create_category": "Créer la catégorie",
     "create_text_channel": "Créer le salon textuel",
     "create_voice_channel": "Créer le salon vocal",
+    "create_private_text_channel": "Créer un salon privé pour un rôle",
     "create_role": "Créer le rôle",
     "rename_channel": "Renommer le salon",
     "rename_role": "Renommer le rôle",
@@ -59,6 +60,7 @@ FIELDS = {
     "create_category": ("name",),
     "create_text_channel": ("name",),
     "create_voice_channel": ("name",),
+    "create_private_text_channel": ("name", "role"),
     "create_role": ("name",),
     "rename_channel": ("name", "new_name"),
     "rename_role": ("name", "new_name"),
@@ -83,6 +85,7 @@ FIELDS = {
 OPTIONAL = {
     "create_text_channel": ("category", "topic"),
     "create_voice_channel": ("category",),
+    "create_private_text_channel": ("category",),
     "create_role": ("color",),
     "configure_module": tuple(dict.fromkeys(field[0] for spec in MODULES.values() for field in spec["fields"])),
 }
@@ -408,6 +411,7 @@ Types autorisés et champs EXACTS :
 create_category {type,name}
 create_text_channel {type,name,category? ,topic?}
 create_voice_channel {type,name,category?}
+create_private_text_channel {type,name,role,category?} (création privée immédiate, rôle explicite)
 create_role {type,name,color?} (color: hex #RRGGBB uniquement)
 configure_welcome {type,channel} (envoie un message lorsqu'un membre rejoint)
 configure_farewell {type,channel} (envoie un message lorsqu'un membre quitte)

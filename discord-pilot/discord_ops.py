@@ -97,16 +97,36 @@ async def execute_action(guild: discord.Guild, item: dict, state=None, created=N
         result = await guild.create_category(item["name"], reason=reason)
         created["categories"][norm(item["name"])] = result
         return "done", f"Catégorie créée (ID {result.id})."
-    if t in {"create_text_channel", "create_voice_channel"}:
+    if t in {"create_text_channel", "create_voice_channel", "create_private_text_channel"}:
         category = get_category(item["category"]) if item.get("category") else None
         existing = [c for c in guild.channels
                     if norm(c.name) == norm(item["name"])
                     and c.category_id == (category.id if category else None)
                     and isinstance(c, discord.VoiceChannel if t == "create_voice_channel" else discord.TextChannel)]
         if existing:
+            if t == "create_private_text_channel":
+                role = get_role(item["role"])
+                room = existing[0]
+                if (room.overwrites_for(guild.default_role).view_channel is not False or
+                        room.overwrites_for(role).view_channel is not True):
+                    raise ValueError("Le salon existe mais n'est pas privé pour le staff. "
+                                     "Corrige ses accès avant de publier les candidatures.")
             return "skipped", "Ce salon existe déjà dans cette catégorie."
         if t == "create_voice_channel":
             result = await guild.create_voice_channel(item["name"], category=category, reason=reason)
+        elif t == "create_private_text_channel":
+            role = get_role(item["role"])
+            if role.is_default():
+                raise ValueError("Le rôle @everyone ne peut pas accéder au salon privé.")
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            }
+            if guild.me:
+                overwrites[guild.me] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, manage_channels=True)
+            result = await guild.create_text_channel(item["name"], category=category,
+                                                     overwrites=overwrites, reason=reason)
         else:
             result = await guild.create_text_channel(item["name"], category=category,
                                                      topic=item.get("topic"), reason=reason)

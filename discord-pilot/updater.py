@@ -31,13 +31,13 @@ TRUSTED_HOSTS = {
 }
 UPDATABLE = {
     "app.py", "planner.py", "storage.py", "discord_ops.py", "integration_catalog.py", "community_modules.py", "community_interactions.py", "community_support.py", "updater.py", "updater_cli.py",
-    "long_requests.py", "plan_runtime.py", "panel_actions.py", "panel_planning.py", "conversational_workflows.py", "discord_diagnostics.py", "frozen_updater.ps1",
+    "long_requests.py", "plan_runtime.py", "panel_actions.py", "panel_planning.py", "conversational_workflows.py", "discord_diagnostics.py", "system_recipes.py", "plan_verification.py", "frozen_updater.ps1",
     "requirements.txt", "version.json", "README.md", "web/index.html", "web/app.js", "web/style.css", "web/updates.css",
     "LANCER_DISCORD_PILOT.bat", "DEMARRER_DISCORD_PILOT.cmd", "demarrer.ps1", "CONSTRUIRE_EXE_WINDOWS.bat",
 }
 REQUIRED = {
     "app.py", "community_modules.py", "community_interactions.py", "community_support.py", "integration_catalog.py", "updater.py", "updater_cli.py", "version.json", "web/index.html", "web/app.js",
-    "web/style.css", "web/updates.css", "demarrer.ps1", "DEMARRER_DISCORD_PILOT.cmd",
+    "web/style.css", "web/updates.css", "demarrer.ps1", "DEMARRER_DISCORD_PILOT.cmd", "system_recipes.py", "plan_verification.py",
 }
 VERSION_FORMAT = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
 
