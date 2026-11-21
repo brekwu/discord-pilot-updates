@@ -42,9 +42,9 @@ class StructuredLongRequestTests(unittest.TestCase):
         stream = BytesIO()
         with ZipFile(stream, "w") as archive:
             for filename in sorted(REQUIRED | newer):
-                content = json.dumps({"version": "0.5.20"}) if filename == "version.json" else filename
+                content = json.dumps({"version": "0.5.21"}) if filename == "version.json" else filename
                 archive.writestr(f"discord-pilot/{filename}", content)
-        contents = inspect_zip(stream.getvalue(), "0.5.20")
+        contents = inspect_zip(stream.getvalue(), "0.5.21")
         self.assertTrue(newer.issubset(contents))
 
     def test_50k_contract_and_model_chunk_limit(self):
