@@ -69,12 +69,16 @@ class FakeState:
         return None
 
 
+class HashableNamespace(SimpleNamespace):
+    __hash__ = object.__hash__
+
+
 class AtomicStaffRoomTests(unittest.IsolatedAsyncioTestCase):
     async def test_staff_room_is_private_at_creation_time(self):
-        public = SimpleNamespace(id=1, name="@everyone")
-        staff = SimpleNamespace(id=2, name="Recruteur")
+        public = HashableNamespace(id=1, name="@everyone")
+        staff = HashableNamespace(id=2, name="Recruteur")
         staff.is_default = lambda: False
-        bot = SimpleNamespace(id=3)
+        bot = HashableNamespace(id=3)
         room = SimpleNamespace(id=4)
         guild = SimpleNamespace(id=123, channels=[], categories=[], roles=[public, staff], me=bot,
                                 default_role=public)
