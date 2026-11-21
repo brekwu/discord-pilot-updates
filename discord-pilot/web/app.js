@@ -329,6 +329,7 @@ function renderHistory() {
     const article = dom("article", "history-item"); const head = dom("div", "history-head");
     const name = dom("div"); name.append(dom("strong", "", p.prompt.length > 220 ? p.prompt.slice(0, 220) + "…" : p.prompt), dom("small", "", `${time(p.created_at)} · ${p.mode} · ${p.actions.length} action(s)`));
     const badge = dom("span", `pill ${p.status === "completed" ? "success" : ["failed", "partial"].includes(p.status) ? "failed" : ""}`, stateName(p.status));
+    if (p.verification) name.append(dom("small", "", `Contrôle Discord : ${p.verification.verified} confirmé(s), ${p.verification.local_only} configuration(s) locale(s), ${p.verification.unverified} non vérifié(s), ${p.verification.mismatch} écart(s)`));
     head.append(name, badge); article.append(head);
     const details = dom("details"); details.append(dom("summary", "", "Afficher les actions et résultats"));
     const ol = dom("ol"); p.actions.forEach((a, index) => {
@@ -377,6 +378,8 @@ function renderPlan() {
   const external = p.actions.some(a => a.type === "suggest_integration");
   $("planMeta").textContent = `Serveur : ${currentGuild()?.name || p.guild_id} · ${p.mode}` + (automation ? " · ⚠ Messages automatiques uniquement quand le bot local reste lancé. L'intent Server Members et la permission Gérer le serveur sont nécessaires pour le suivi des invitations." : "") + (external ? " · ⚠ L'installation d'un bot tiers nécessite ton autorisation Discord sur le site officiel : elle n'est jamais automatique." : "");
   $("planBadge").textContent = stateName(p.status);
+  if (p.verification) $("planMeta").textContent += ` · Vérification Discord : ${p.verification.verified} OK, ${p.verification.local_only} locaux, ${p.verification.unverified} non vérifiés, ${p.verification.mismatch} écarts`;
+
   $("planBadge").className = `pill ${p.status === "completed" ? "success" : ["failed", "partial"].includes(p.status) ? "failed" : ""}`;
   replace($("planActions"), p.actions.map((a, i) => {
     const li = dom("li"); const num = dom("span", "step-num", i + 1);
