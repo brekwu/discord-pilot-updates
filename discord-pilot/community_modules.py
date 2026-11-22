@@ -13,6 +13,7 @@ from datetime import datetime
 import re
 import time
 from zoneinfo import ZoneInfo
+from recruitment_tickets import normalize_recruitment_games
 
 
 MODULES = {
@@ -48,10 +49,11 @@ MODULES = {
     "daily_post": {"title": "Annonce quotidienne", "icon": "📅", "description": "Publie un message chaque jour à l'heure de Paris tant que ton PC et le bot sont lancés.",
                    "fields": [("channel_id", "text", "Salon de publication"), ("hour", "hour", "Heure (HH:MM)"),
                               ("message", "message", "Message quotidien")]},
-    "tickets": {"title": "Tickets privés interactifs", "icon": "🎟️", "description": "Publie un panneau Ouvrir un ticket, crée un salon privé puis permet sa fermeture et son archivage sans le supprimer.",
+    "tickets": {"title": "Tickets privés interactifs", "icon": "🎟️", "description": "Tickets de support privés. Option : ajouter quatre boutons de recrutement esports distincts (sans attribuer automatiquement des rôles).",
                 "fields": [("panel_channel_id", "text", "Salon du panneau"),
                            ("category_id", "category", "Catégorie des tickets"),
-                           ("staff_role_id", "optional_role", "Rôle du support (facultatif)")]},
+                           ("staff_role_id", "optional_role", "Rôle du support (facultatif)"),
+                           ("recruitment_games", "games", "Recrutement (facultatif) : rocket-league, valorant, fortnite, clash-of-clans")]},
     "modmail": {"title": "Modmail privé par MP", "icon": "✉️", "description": "Transmet les messages privés au support et permet aux modérateurs de répondre avec !reply ID message. Nécessite Message Content Intent.",
                 "fields": [("staff_channel_id", "private_text", "Salon privé du support"),
                            ("staff_role_id", "optional_role", "Rôle du support (facultatif)")], "requires": "content"},
@@ -104,6 +106,10 @@ def normalize_module(name: str, data: dict, guild) -> dict:
                     if channel.permissions_for(guild.default_role).view_channel:
                         raise ValueError("Le salon des journaux ou du support doit être privé pour @everyone.")
             result[key] = value
+        elif kind == "games":
+            games = normalize_recruitment_games(value)
+            if games:
+                result[key] = games
         elif kind == "words":
             words = [word.strip().casefold() for word in value.split(",") if word.strip()]
             if len(words) > 30 or any(len(word) > 45 for word in words):
