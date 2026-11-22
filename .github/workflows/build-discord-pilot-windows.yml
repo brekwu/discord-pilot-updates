@@ -444,10 +444,11 @@ jobs:
           }
           $exeDigest = [string]$exeAsset[0].digest
           $archiveDigest = [string]$archiveAsset[0].digest
-          if ($exeDigest -cnotmatch '^sha256:[a-f0-9]{64}
- -or
-              $archiveDigest -cnotmatch '^sha256:[a-f0-9]{64}
-) {
+          if ($exeDigest.Length -ne 71 -or $archiveDigest.Length -ne 71 -or
+              -not $exeDigest.StartsWith('sha256:') -or
+              -not $archiveDigest.StartsWith('sha256:') -or
+              $exeDigest.Substring(7) -match '[^0-9a-f]' -or
+              $archiveDigest.Substring(7) -match '[^0-9a-f]') {
             throw 'L API GitHub ne fournit pas les SHA256 complets des fichiers publiés.'
           }
           $exeSha = $exeDigest.Substring(7)
