@@ -10,6 +10,8 @@ on:
       - 'discord-pilot/web/index.html'
       - 'discord-pilot/recruitment_tickets.py'
       - 'discord-pilot/panel_actions.py'
+      - 'discord-pilot/ticket_diagnostics.py'
+      - 'discord-pilot/tests/test_ticket_diagnostics.py'
       - 'discord-pilot/community_modules.py'
       - 'discord-pilot/app.py'
       - 'discord-pilot/web/updates.css'
@@ -48,7 +50,7 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $destination -Force }
           }
 
-      - name: Appliquer le planificateur long format et les modules existants 0.5.24
+      - name: Appliquer le planificateur long format et les modules existants 0.5.25
         shell: pwsh
         run: |
           Copy-Item 'discord-pilot/app.py' 'buildsrc/discord-pilot/app.py' -Force
@@ -64,6 +66,8 @@ jobs:
           Copy-Item 'discord-pilot/integration_catalog.py' 'buildsrc/discord-pilot/integration_catalog.py' -Force
           Copy-Item 'discord-pilot/community_modules.py' 'buildsrc/discord-pilot/community_modules.py' -Force
           Copy-Item 'discord-pilot/recruitment_tickets.py' 'buildsrc/discord-pilot/recruitment_tickets.py' -Force
+          Copy-Item 'discord-pilot/ticket_diagnostics.py' 'buildsrc/discord-pilot/ticket_diagnostics.py' -Force
+          Copy-Item 'discord-pilot/tests/test_ticket_diagnostics.py' 'buildsrc/discord-pilot/tests/test_ticket_diagnostics.py' -Force
           Copy-Item 'discord-pilot/community_interactions.py' 'buildsrc/discord-pilot/community_interactions.py' -Force
           Copy-Item 'discord-pilot/community_support.py' 'buildsrc/discord-pilot/community_support.py' -Force
           Copy-Item 'discord-pilot/discord_ops.py' 'buildsrc/discord-pilot/discord_ops.py' -Force
@@ -121,7 +125,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.24' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.25' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrêté trop tôt : $($p.ExitCode)" }
             }
@@ -294,7 +298,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $data = Invoke-RestMethod -Uri 'http://127.0.0.1:9216/api/bootstrap' -TimeoutSec 2
-                if ($data.version -eq '0.5.24' -and $data.online -eq $false) { $ready = $true; break }
+                if ($data.version -eq '0.5.25' -and $data.online -eq $false) { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw "Le programme s'est arrete malgre le port alternatif : $($p.ExitCode)" }
             }
@@ -327,7 +331,7 @@ jobs:
               Start-Sleep -Seconds 2
               try {
                 $boot = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
-                if ($boot.version -eq '0.5.24') { $ready = $true; break }
+                if ($boot.version -eq '0.5.25') { $ready = $true; break }
               } catch {}
               if ($p.HasExited) { throw 'L EXE s est arrete avant de preparer la mise a jour.' }
             }
@@ -337,7 +341,7 @@ jobs:
             # restart without needing to build an unpublishable second binary.
             Copy-Item $installed (Join-Path $updates 'pending.exe') -Force
             $hash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-            $pending = @{version='0.5.24';sha256=$hash;format='exe'} | ConvertTo-Json
+            $pending = @{version='0.5.25';sha256=$hash;format='exe'} | ConvertTo-Json
             [System.IO.File]::WriteAllText((Join-Path $updates 'pending.json'), $pending)
             $response = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/update/apply' -Method POST -ContentType 'application/json' -Headers @{'X-Pilot-CSRF'=$boot.csrf} -Body '{}'
             if (-not $response.restarting) { throw 'Le serveur n a pas accepte le redemarrage.' }
@@ -348,10 +352,10 @@ jobs:
               try {
                 $boot2 = Invoke-RestMethod -Uri 'http://127.0.0.1:9337/api/bootstrap' -TimeoutSec 2
                 $logPath = Join-Path $dataRoot 'updater.log'
-                if ($boot2.version -eq '0.5.24' -and
+                if ($boot2.version -eq '0.5.25' -and
                     -not (Test-Path (Join-Path $updates 'pending.json')) -and
                     (Test-Path $logPath) -and
-                    (Select-String -Path $logPath -Pattern 'Version 0.5.24 installee et ouverte' -Quiet)) {
+                    (Select-String -Path $logPath -Pattern 'Version 0.5.25 installee et ouverte' -Quiet)) {
                   $restarted = $true
                   break
                 }
@@ -399,11 +403,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiscordPilot_EXE_Windows_v0.5.24
+          name: DiscordPilot_EXE_Windows_v0.5.25
           path: buildsrc/discord-pilot/dist/DiscordPilot.exe
           if-no-files-found: error
 
-      - name: Publier la version 0.5.24 après les tests Windows
+      - name: Publier la version 0.5.25 après les tests Windows
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -411,7 +415,7 @@ jobs:
           $exe = (Resolve-Path 'buildsrc/discord-pilot/dist/DiscordPilot.exe').Path
           $sourceRoot = Join-Path $PWD 'source-clean/discord-pilot'
           New-Item -ItemType Directory -Force -Path $sourceRoot | Out-Null
-          $allowed = @('app.py', 'planner.py', 'long_requests.py', 'plan_runtime.py', 'panel_actions.py', 'panel_planning.py', 'conversational_workflows.py', 'system_recipes.py', 'plan_verification.py', 'discord_diagnostics.py', 'integration_catalog.py', 'community_modules.py', 'recruitment_tickets.py', 'community_interactions.py', 'community_support.py', 'storage.py', 'discord_ops.py', 'updater.py', 'updater_cli.py', 'requirements.txt', 'version.json', 'README.md', 'web/index.html', 'web/app.js', 'web/style.css', 'web/updates.css', 'LANCER_DISCORD_PILOT.bat', 'DEMARRER_DISCORD_PILOT.cmd', 'demarrer.ps1', 'CONSTRUIRE_EXE_WINDOWS.bat')
+          $allowed = @('app.py', 'planner.py', 'long_requests.py', 'plan_runtime.py', 'panel_actions.py', 'panel_planning.py', 'conversational_workflows.py', 'system_recipes.py', 'plan_verification.py', 'discord_diagnostics.py', 'integration_catalog.py', 'community_modules.py', 'recruitment_tickets.py', 'ticket_diagnostics.py', 'community_interactions.py', 'community_support.py', 'storage.py', 'discord_ops.py', 'updater.py', 'updater_cli.py', 'requirements.txt', 'version.json', 'README.md', 'web/index.html', 'web/app.js', 'web/style.css', 'web/updates.css', 'LANCER_DISCORD_PILOT.bat', 'DEMARRER_DISCORD_PILOT.cmd', 'demarrer.ps1', 'CONSTRUIRE_EXE_WINDOWS.bat')
           foreach ($relative in $allowed) {
             $destination = Join-Path $sourceRoot $relative
             New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
@@ -419,14 +423,14 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Discord Pilot 0.5.24 : micro local Whisper visible au demarrage, avec cible automatique sur la demande principale et les champs de formulaire, sans execution Discord automatique ; systemes interactifs complets de tickets et candidatures en langage naturel avec ressources explicites, publication de boutons existants, creation atomique de salons staff prives et verification des modifications via lecture Discord. Installation par MAJ, validation obligatoire.'
-          $tag = 'v0.5.24'
+          $notes = 'Discord Pilot 0.5.25 : diagnostic des tickets du serveur Discord en lecture seule, verification des permissions du bot, du panneau, des boutons des quatre jeux et de la synchronisation des poles ; tests de compilation Windows et mise a jour verifies. Une ouverture et fermeture reelles doivent encore etre testees manuellement.'
+          $tag = 'v0.5.25'
           # Never overwrite an existing version: changing its binary invalidates
           # checksums already trusted by clients that fetched update.json.
           $existing = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" 2>$null
           $isNew = $LASTEXITCODE -ne 0
           if ($isNew) {
-            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.24' --notes $notes
+            gh release create $tag $exe $archive --title 'Discord Pilot 0.5.25' --notes $notes
             if ($LASTEXITCODE -ne 0) { throw 'La publication de la release a échoué.' }
           } else {
             Write-Host 'Release existante : les binaires publiés restent immuables.'
@@ -458,10 +462,10 @@ jobs:
             throw 'Empreintes des nouveaux fichiers GitHub différentes des binaires testés.'
           }
           $manifest = [ordered]@{
-            version = '0.5.24'
-            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.24/DiscordPilot_Source.zip'
+            version = '0.5.25'
+            url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.25/DiscordPilot_Source.zip'
             sha256 = $archiveSha
-            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.24/DiscordPilot.exe'
+            exe_url = 'https://github.com/brekwu/discord-pilot-updates/releases/download/v0.5.25/DiscordPilot.exe'
             exe_sha256 = $exeSha
           }
           $json = ConvertTo-Json -InputObject $manifest -Depth 3
@@ -487,7 +491,7 @@ jobs:
               $published = $true
               break
             }
-            git commit -m 'chore: publier le manifeste 0.5.24'
+            git commit -m 'chore: publier le manifeste 0.5.25'
             if ($LASTEXITCODE -ne 0) { throw 'Commit du manifeste impossible.' }
             git push origin HEAD:main
             if ($LASTEXITCODE -eq 0) {
