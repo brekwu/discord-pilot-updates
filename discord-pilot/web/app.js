@@ -88,6 +88,8 @@ function updateUniversalVoiceButton() {
   if (!button) return;
   const active = voice.stream ? voice.target : voice.field;
   button.hidden = !active || active.id === "requestText" || !activeVoiceTarget(active);
+  const dock = $("universalVoiceDock");
+  if (dock) dock.hidden = button.hidden;
   button.disabled = Boolean(voice.busy);
   button.textContent = voice.stream ? "■ Arrêter la dictée" : "🎙 Dicter ici";
   button.setAttribute("aria-label", voice.stream ? "Arrêter la dictée vocale" : "Dicter dans le champ sélectionné");
