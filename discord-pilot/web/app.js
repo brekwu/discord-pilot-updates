@@ -83,16 +83,31 @@ function appendVoiceTranscript(field, transcript) {
   return true;
 }
 
+function currentVoiceField() {
+  // The persistent dock defaults to the main request composer. When another
+  // editable field is selected (including a modal), keep the target there.
+  const selected = voice.stream ? voice.target : voice.field;
+  if (selected && activeVoiceTarget(selected) &&
+      (selected.id === "requestText" || canDictateTo(selected))) return selected;
+  return $("requestText");
+}
+
 function updateUniversalVoiceButton() {
   const button = $("universalVoiceButton");
   if (!button) return;
-  const active = voice.stream ? voice.target : voice.field;
-  button.hidden = !active || active.id === "requestText" || !activeVoiceTarget(active);
+  const active = currentVoiceField();
+  // The main composer already displays an inline microphone while focused.
+  // Elsewhere, always show the dock without requiring a prior input focus.
+  const mainComposerFocused = active?.id === "requestText" &&
+    document.activeElement?.id === "requestText";
+  button.hidden = !active || !activeVoiceTarget(active) ||
+    (mainComposerFocused && !voice.stream);
   const dock = $("universalVoiceDock");
   if (dock) dock.hidden = button.hidden;
   button.disabled = Boolean(voice.busy);
   button.textContent = voice.stream ? "■ Arrêter la dictée" : "🎙 Dicter ici";
-  button.setAttribute("aria-label", voice.stream ? "Arrêter la dictée vocale" : "Dicter dans le champ sélectionné");
+  button.setAttribute("aria-label", voice.stream ? "Arrêter la dictée vocale" :
+    "Dicter dans le champ sélectionné");
 }
 
 function initializeUniversalVoice() {
@@ -105,7 +120,7 @@ function initializeUniversalVoice() {
   const button = $("universalVoiceButton");
   if (!button) return;
   button.addEventListener("pointerdown", event => event.preventDefault());
-  button.onclick = () => toggleVoiceRecording(voice.field);
+  button.onclick = () => toggleVoiceRecording(currentVoiceField());
   updateUniversalVoiceButton();
 }
 

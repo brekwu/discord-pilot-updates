@@ -235,8 +235,48 @@ function testUniversalVoiceFieldSafety() {
   assert.match(html, /id="universalVoiceStatus"/);
 }
 
+function testUniversalVoiceDockVisibleBeforeFocus() {
+  const requestField = {
+    id: "requestText", tagName: "TEXTAREA", disabled: false,
+    readOnly: false, isConnected: true, closest: () => null,
+  };
+  const otherField = {
+    id: "pollQuestion", tagName: "INPUT", type: "text",
+    disabled: false, readOnly: false, isConnected: true, closest: () => null,
+  };
+  const button = {
+    hidden: true, disabled: false, textContent: "",
+    setAttribute(name, value) {this[name] = value;},
+  };
+  const dock = {hidden: true};
+  const fields = {requestText: requestField, universalVoiceButton: button, universalVoiceDock: dock};
+  const document = {activeElement: null, getElementById: id => fields[id] || null};
+  const ctx = {document, localStorage: {getItem: () => ""}, window: {}};
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, {filename: "web/app.js"});
+
+  vm.runInContext("updateUniversalVoiceButton()", ctx);
+  assert.equal(dock.hidden, false, "microphone must be visible before selecting a text field");
+  assert.equal(vm.runInContext("currentVoiceField()", ctx), requestField);
+  document.activeElement = requestField;
+  vm.runInContext("updateUniversalVoiceButton()", ctx);
+  assert.equal(dock.hidden, true, "main composer retains its built-in microphone");
+
+  ctx.otherField = otherField;
+  vm.runInContext("voice.field = otherField; updateUniversalVoiceButton()", ctx);
+  assert.equal(dock.hidden, false, "another focused field must offer the voice dock");
+  assert.equal(vm.runInContext("currentVoiceField()", ctx), otherField);
+
+  otherField.disabled = true;
+  document.activeElement = null;
+  vm.runInContext("updateUniversalVoiceButton()", ctx);
+  assert.equal(dock.hidden, false, "closed/disabled fields fall back to the composer");
+  assert.equal(vm.runInContext("currentVoiceField()", ctx), requestField);
+}
+
 (async () => {
   testUniversalVoiceFieldSafety();
+  testUniversalVoiceDockVisibleBeforeFocus();
   await testVoiceRecorderPreservesAllChunks();
   await testFullMicrophoneLifecycle();
   await testEmptyModelPlanShowsEditableGuidance();
