@@ -355,3 +355,7 @@ python -m unittest discover -s tests -v
 ```
 
 Le test d'application sans token Discord peut être lancé avec `DISCORD_PILOT_NO_BROWSER=1 python app.py` et le navigateur sur `http://127.0.0.1:8765`.
+
+### Dictée locale universelle (depuis 0.5.22)
+
+Le micro **Dicter ici** apparaît après sélection d'un champ de texte dans les formulaires, sondages, paramètres et fenêtres modales. La transcription reste locale via Whisper Small et s'ajoute **au champ choisi**. Les champs mot de passe et numériques sont exclus. Rien n'est envoyé à Discord par la dictée seule. Si le champ est fermé avant la fin de la transcription, le texte reste affiché dans l'état vocal pour copie.

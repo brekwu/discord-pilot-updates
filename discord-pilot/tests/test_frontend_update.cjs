@@ -146,6 +146,21 @@ async function testFullMicrophoneLifecycle() {
   assert.equal(wav.getInt16(44, true), 6553, "sample conversion");
   assert.equal(elements.requestText.value, "je veux créer un salon puis un deuxième");
   assert.equal(elements.voicePreview.hidden, false, "the user should be able to replay audio");
+  // Second independent dictation captures the exact editable modal field.
+  const modalField = {
+    tagName: "TEXTAREA", type: "textarea", id: "modal-details",
+    value: "Début", maxLength: 50000, isConnected: true,
+    getAttribute: () => null, closest: () => ({hidden: false}),
+    dispatchEvent() {},
+  };
+  ctx.modalField = modalField;
+  await vm.runInContext("toggleVoiceRecording(modalField)", ctx);
+  await vm.runInContext("finishVoiceRecording()", ctx);
+  assert.equal(modalField.value,
+    "Début je veux créer un salon puis un deuxième",
+    "Whisper must transcribe in the selected dynamic modal field, never only the main composer");
+  assert.equal(elements.requestText.value, "je veux créer un salon puis un deuxième",
+    "Dictation in another field may not overwrite the main command");
 }
 
 async function testEmptyModelPlanShowsEditableGuidance() {
@@ -182,11 +197,50 @@ async function testEmptyModelPlanShowsEditableGuidance() {
   assert.equal(typeof ctx.deferredRetry, "function", "the edited request should be resubmitted after the modal closes");
 }
 
+
+function testUniversalVoiceFieldSafety() {
+  const ctx = {
+    document: {getElementById: () => null},
+    localStorage: {getItem: () => ""},
+    window: {}, Event,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, {filename: "web/app.js"});
+  function field(type, value = "") {
+    return {
+      tagName: type === "textarea" ? "TEXTAREA" : "INPUT",
+      type, value, id: "dynamic-question", readOnly: false,
+      disabled: false, isConnected: true,
+      getAttribute: () => null, closest: () => ({hidden: false}),
+      dispatchEvent() {},
+    };
+  }
+  ctx.question = field("textarea", "Question");
+  ctx.implicitText = field("text");
+  ctx.password = field("password");
+  ctx.number = field("number");
+  assert.equal(vm.runInContext("canDictateTo(question)", ctx), true);
+  assert.equal(vm.runInContext("canDictateTo(implicitText)", ctx), true);
+  assert.equal(vm.runInContext("canDictateTo(password)", ctx), false);
+  assert.equal(vm.runInContext("canDictateTo(number)", ctx), false);
+  assert.equal(vm.runInContext('appendVoiceTranscript(question, "pour notre équipe")', ctx), true);
+  assert.equal(ctx.question.value, "Question pour notre équipe");
+  ctx.question.getAttribute = () => "8";
+  assert.equal(vm.runInContext('appendVoiceTranscript(question, "texte trop long")', ctx), false);
+  assert.equal(ctx.question.value, "Question pour notre équipe");
+  ctx.question.closest = () => ({hidden: true});
+  assert.equal(vm.runInContext('appendVoiceTranscript(question, "invisible")', ctx), false);
+  assert.equal(ctx.question.value, "Question pour notre équipe");
+  assert.match(html, /id="universalVoiceButton"/);
+  assert.match(html, /id="universalVoiceStatus"/);
+}
+
 (async () => {
+  testUniversalVoiceFieldSafety();
   await testVoiceRecorderPreservesAllChunks();
   await testFullMicrophoneLifecycle();
   await testEmptyModelPlanShowsEditableGuidance();
   await simulateUpdate({portChanged: false});
   await simulateUpdate({portChanged: true});
-  process.stdout.write("Frontend tests OK: guidance, recorder, transcription, update recovery.\n");
+  process.stdout.write("Frontend tests OK: universal mic, modal dictation, recorder, transcription, update recovery.\n");
 })().catch(error => {console.error(error); process.exitCode = 1;});
