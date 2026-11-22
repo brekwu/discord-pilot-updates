@@ -17,6 +17,7 @@ CHANNEL = "223456789012345678"
 CATEGORY = "323456789012345678"
 STAFF = "423456789012345678"
 MESSAGE = "523456789012345678"
+BOT_ID = 623456789012345678
 
 
 class FakeRole:
@@ -41,9 +42,12 @@ class FakePanel:
     def _message(*, games=("valorant", "fortnite")):
         ids = [f"pilot:ticket:open:{GID}"]
         ids.extend(f"pilot:ticket:open:{GID}:{g}" for g in games)
-        return SimpleNamespace(components=[
-            SimpleNamespace(children=[SimpleNamespace(custom_id=custom) for custom in ids])
-        ])
+        return SimpleNamespace(
+            author=SimpleNamespace(id=BOT_ID),
+            components=[
+                SimpleNamespace(children=[SimpleNamespace(custom_id=custom) for custom in ids])
+            ],
+        )
 
     async def _fetch(self, ident):
         if ident != int(MESSAGE):
@@ -71,7 +75,7 @@ class FakeGuild:
     def __init__(self):
         self.id = int(GID)
         self.default_role = object()
-        self.me = SimpleNamespace(guild_permissions=SimpleNamespace(
+        self.me = SimpleNamespace(id=BOT_ID, guild_permissions=SimpleNamespace(
             manage_channels=True, administrator=False,
         ))
         self.panel = FakePanel()
@@ -129,6 +133,17 @@ class LiveTicketDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["status"], "attention")
         self.assertIn("buttons", [v["code"] for v in report["checks"] if not v["ok"]])
         self.assertEqual(self.guild.panel.fetch_message.await_count, 1)
+
+    async def test_wrong_author_and_unconfigured_buttons_fail(self):
+        self.guild.panel.message.author.id = 999999999999999999
+        result = await self.audit()
+        self.assertEqual(result["status"], "attention")
+        self.assertIn("panel_author", [c["code"] for c in result["checks"] if not c["ok"]])
+        self.guild.panel.message = FakePanel._message(
+            games=("valorant", "fortnite", "clash-of-clans"))
+        result = await self.audit()
+        self.assertEqual(result["status"], "attention")
+        self.assertIn("buttons", [c["code"] for c in result["checks"] if not c["ok"]])
 
     async def test_configured_staff_missing_is_reported(self):
         self.guild.get_role = lambda ident: None
