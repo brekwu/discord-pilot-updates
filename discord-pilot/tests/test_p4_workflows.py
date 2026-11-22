@@ -61,6 +61,51 @@ class P4PlanningTests(unittest.TestCase):
         self.assertEqual(server_preset_plan("Crée un serveur tournoi"), app.PRESETS["tournoi"]["actions"])
         self.assertEqual(server_preset_plan("Crée un serveur pour tous"), [])
 
+    def test_vexora_esport_preset_is_complete_and_strictly_additive(self):
+        plan = app.PRESETS["vexora-esport"]["actions"]
+        self.assertEqual(len(plan), 56)
+        self.assertEqual(sum(a["type"] == "create_category" for a in plan), 6)
+        self.assertEqual(sum(a["type"] == "create_text_channel" for a in plan), 28)
+        self.assertEqual(sum(a["type"] == "create_role" for a in plan), 22)
+        self.assertEqual(set(a["type"] for a in plan),
+                         {"create_category", "create_text_channel", "create_role"})
+        self.assertNotIn("configure_module", [a["type"] for a in plan])
+        self.assertNotIn("publish_ticket_panel", [a["type"] for a in plan])
+        self.assertNotIn("make_private", [a["type"] for a in plan])
+        self.assertEqual(len({(a["type"], a["name"], a.get("category")) for a in plan}),
+                         len(plan))
+        role_names = {a["name"] for a in plan if a["type"] == "create_role"}
+        self.assertIn("Manager Esport", role_names)
+        self.assertIn("Recruteur Esport", role_names)
+        self.assertIn("Roster Clash of Clans", role_names)
+        for game, slug, category in (
+            ("Rocket League", "rocket-league", "ROCKET LEAGUE"),
+            ("Valorant", "valorant", "VALORANT"),
+            ("Fortnite", "fortnite", "FORTNITE"),
+            ("Clash of Clans", "clash-of-clans", "CLASH OF CLANS"),
+        ):
+            self.assertTrue({"Manager " + game, "Joueur " + game,
+                             "Coach " + game, "Capitaine " + game} <= role_names)
+            channels = {a["name"] for a in plan
+                        if a["type"] == "create_text_channel"
+                        and a.get("category") == category}
+            self.assertEqual(channels, {
+                f"{kind}-{slug}" for kind in (
+                    "roster", "discussion", "strategie", "resultats",
+                    "matchs-a-venir", "actualites")})
+        # Generic esports tournament templates are left unchanged.
+        self.assertEqual(server_preset_plan("Crée un serveur esport"),
+                         app.PRESETS["tournoi"]["actions"])
+        for phrase in ("Crée une structure Vexora Esport",
+                       "Crée un serveur Vexora e-sport",
+                       "Prépare le modèle pour Vexora Esports"):
+            self.assertEqual(server_preset_plan(phrase), plan)
+            self.assertEqual(app.supported_local_plan(phrase), plan)
+        for phrase in ("Crée un serveur Vexora Community",
+                       "Supprime les salons Vexora Esport",
+                       "Configure tous les serveurs Vexora"):
+            self.assertEqual(server_preset_plan(phrase), [])
+
     def test_quoted_message_is_not_split_by_conjunctions(self):
         clauses = workflow_clauses('Crée un salon annonces et publie "Bonjour, et bienvenue" dans annonces')
         self.assertEqual(clauses, ["Crée un salon annonces", 'publie "Bonjour, et bienvenue" dans annonces'])
@@ -192,6 +237,21 @@ class P4ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["plan"]["status"], "draft")
         self.assertEqual(len(body["plan"]["actions"]), 5)
         self.assertEqual(body["plan"]["actions"][-1]["type"], "publish_ticket_panel")
+
+    async def test_vexora_esport_preset_is_a_draft_until_confirmation(self):
+        response = await self.client.post("/api/preset", json={
+            "guild_id": str(GID), "preset_id": "vexora-esport",
+        }, headers={"X-Pilot-CSRF": self.csrf})
+        self.assertEqual(response.status, 200)
+        body = await response.json()
+        self.assertEqual(body["plan"]["status"], "draft")
+        self.assertEqual(len(body["plan"]["actions"]), 56)
+        self.assertEqual(len(app.STATE.history(str(GID))), 1)
+        # Preparing a reviewable draft never invokes Discord.
+        response = await self.client.post("/api/preset", json={
+            "guild_id": str(GID), "preset_id": "vexora-esport",
+        })
+        self.assertEqual(response.status, 403)
 
     async def test_real_diagnostic_refuses_disconnected_bot(self):
         with patch.object(app.MANAGER, "get_guild", return_value=None):
