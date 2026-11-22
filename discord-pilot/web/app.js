@@ -629,6 +629,38 @@ function renderModules() {
         } finally { diagnostic.disabled = false; }
       };
       article.append(diagnostic, output);
+      const smoke = dom("button", "outline-button", "🧪 Tester un ticket privé temporaire");
+      const smokeOutput = dom("div", "module-description");
+      smoke.onclick = () => {
+        if (!app.selected) return toast("Sélectionne le serveur Discord.", true);
+        const guildId = app.selected;
+        modal({
+          title: "Test réel technique des tickets",
+          description: "Avec le bot connecté, créer un salon PRIVÉ temporaire dans la catégorie des tickets, vérifier les accès du staff, envoyer et relire un message, simuler l'archivage puis supprimer uniquement ce salon. Aucun ticket existant ne sera modifié. Un clic réel de candidat restera à tester.",
+          confirmText: "Créer et supprimer le ticket de test",
+          onConfirm: async () => {
+            smoke.disabled = true;
+            replace(smokeOutput, [dom("p", "", "Test Discord en cours…")]);
+            try {
+              const report = await request(`/api/interactive/${guildId}/tickets/smoke`,
+                                           {data: {}});
+              replace(smokeOutput, [
+                dom("strong", "", report.status === "verified_technical_only"
+                  ? "✓ Infrastructure testée sur Discord (clic candidat non testé)"
+                  : "✗ Test technique incomplet"),
+                dom("p", "", report.detail),
+                ...(report.checks || []).map(x =>
+                  dom("p", "", `${x.ok ? "✓" : "✗"} ${x.name} : ${x.detail}`)),
+              ]);
+            } catch (e) {
+              replace(smokeOutput, [dom("p", "", `Test impossible : ${e.message}`)]);
+            } finally {
+              smoke.disabled = false;
+            }
+          }
+        });
+      };
+      article.append(smoke, smokeOutput);
     }
     if (spec.id === "applications") {
       const panel = dom("button", "outline-button", "📝 Publier le formulaire de candidature");
