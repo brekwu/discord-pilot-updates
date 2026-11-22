@@ -54,6 +54,11 @@ class Temporary:
         return SimpleNamespace(view_channel=True, send_messages=True)
 
 
+class BotMember:
+    def __init__(self):
+        self.guild_permissions = SimpleNamespace(manage_channels=True)
+
+
 class Guild:
     id = int(GID)
 
@@ -64,7 +69,7 @@ class Guild:
         self.category = Category()
         self.panel = Text()
         self.channels = [self.category, self.panel]
-        self.me = SimpleNamespace(guild_permissions=SimpleNamespace(manage_channels=True))
+        self.me = BotMember()
         self.temp = Temporary(self)
         self.create_text_channel = AsyncMock(return_value=self.temp)
 
@@ -80,7 +85,7 @@ def state_with_tickets(root):
     state.set_module(GID, "tickets", {
         "enabled": True, "category_id": CATEGORY_ID,
         "panel_channel_id": PANEL_ID, "staff_role_id": STAFF_ID,
-        "recruitment_games": ["valorant", "fortnite"],
+        "recruitment_games": "valorant, fortnite",
     })
     return state
 
