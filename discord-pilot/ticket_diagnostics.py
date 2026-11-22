@@ -8,7 +8,7 @@ from __future__ import annotations
 import discord
 
 from community_modules import normalize_module
-from recruitment_tickets import GAME_LABELS, enabled_games
+from recruitment_tickets import enabled_games
 
 
 async def inspect_ticket_panel(guild, state) -> dict:
@@ -106,6 +106,11 @@ async def inspect_ticket_panel(guild, state) -> dict:
                 "requires_interaction_test": True}
 
     check("live_message", True, "Message du panneau retrouvé dans Discord.")
+    author = getattr(getattr(message, "author", None), "id", None)
+    correct_author = author == getattr(member, "id", None) and author is not None
+    check("panel_author", correct_author,
+          "Le message appartient au bot connecté." if correct_author
+          else "Le message du panneau n'appartient pas au bot connecté.")
     expected = {f"pilot:ticket:open:{gid}"}
     expected.update(f"pilot:ticket:open:{gid}:{game}" for game in games)
     observed = {
@@ -113,7 +118,7 @@ async def inspect_ticket_panel(guild, state) -> dict:
         for row in getattr(message, "components", ())
         for button in getattr(row, "children", ())
     }
-    valid_buttons = expected <= observed
+    valid_buttons = expected == observed
     check("buttons", valid_buttons,
           "Boutons du support et des jeux présents dans le message publié."
           if valid_buttons else "Boutons absents ou non à jour : republie le panneau existant.")
