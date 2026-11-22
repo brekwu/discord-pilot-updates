@@ -37,6 +37,7 @@ from integration_catalog import PROVIDERS, catalog, recommended_providers
 from panel_actions import publish_panel
 from recruitment_tickets import GAME_LABELS, enabled_games, ticket_name
 from ticket_diagnostics import inspect_ticket_panel
+from vexora_esport_audit import audit_vexora_esport
 from system_recipes import recipe_plan, recipe_kind, recipe_publication_authorized, uncovered_requirements
 from plan_verification import verify_plan
 from panel_planning import (complete_panel_plan, direct_panel_plan,
@@ -1371,6 +1372,13 @@ async def api_ticket_diagnostic(request):
     return web.json_response({"guild_id": guild_id, **result})
 
 
+async def api_vexora_esport_audit(request):
+    """Read real Discord roles/channels; do not change the selected guild."""
+    guild_id = require_id(request.match_info["guild_id"])
+    report = await audit_vexora_esport(MANAGER.get_guild(guild_id))
+    return web.json_response({"guild_id": guild_id, **report})
+
+
 async def api_ticket_panel(request):
     guild_id = require_id(request.match_info["guild_id"])
     guild = MANAGER.get_guild(guild_id)
@@ -2139,6 +2147,7 @@ def build_app():
     app.router.add_post("/api/community/{guild_id}/warn", api_warning_create)
     app.router.add_get("/api/interactive/{guild_id}", api_interactive)
     app.router.add_get("/api/interactive/{guild_id}/tickets/diagnostic", api_ticket_diagnostic)
+    app.router.add_get("/api/audit/{guild_id}/vexora-esport", api_vexora_esport_audit)
     app.router.add_post("/api/interactive/{guild_id}/tickets/panel", api_ticket_panel)
     app.router.add_post("/api/interactive/{guild_id}/applications/panel", api_application_panel)
     app.router.add_post("/api/interactive/{guild_id}/{kind}", api_interactive_create)
