@@ -664,6 +664,50 @@ PRESETS = {
 }
 
 
+
+# Separate, explicitly named Vexora Esport layout. Deliberately additive:
+# create_* operations reuse existing roles/categories/channels by exact name.
+# No deletions, no blanket permission grants, no changes to VexoraKey modules.
+# Tickets are not configured here because the guild may already use its
+# shared "tickets" module for VexoraKey customer support.
+_VEXORA_GAMES = (
+    ("Rocket League", "rocket-league", "ROCKET LEAGUE"),
+    ("Valorant", "valorant", "VALORANT"),
+    ("Fortnite", "fortnite", "FORTNITE"),
+    ("Clash of Clans", "clash-of-clans", "CLASH OF CLANS"),
+)
+_VEXORA_ESPORT_ACTIONS = [
+    action("create_category", name="VEXORA ESPORT"),
+    action("create_category", name="RECRUTEMENT ESPORT"),
+    action("create_text_channel", name="actualites-esport", category="VEXORA ESPORT"),
+    action("create_text_channel", name="resultats-equipes-esport", category="VEXORA ESPORT"),
+    action("create_text_channel", name="rosters-esport", category="VEXORA ESPORT"),
+    action("create_text_channel", name="recrutement-esport", category="RECRUTEMENT ESPORT"),
+]
+for _game, _slug, _category in _VEXORA_GAMES:
+    _VEXORA_ESPORT_ACTIONS.append(action("create_category", name=_category))
+    for _room in ("roster", "discussion", "strategie", "resultats", "matchs-a-venir", "actualites"):
+        _VEXORA_ESPORT_ACTIONS.append(action(
+            "create_text_channel", name=f"{_room}-{_slug}", category=_category,
+        ))
+for _role in ("Responsable Vexora Esport", "Staff Vexora Esport",
+              "Manager Esport", "Recruteur Esport", "Analyste Esport"):
+    _VEXORA_ESPORT_ACTIONS.append(action("create_role", name=_role))
+for _game, _slug, _category in _VEXORA_GAMES:
+    for _type in ("Manager", "Capitaine", "Joueur", "Coach"):
+        _VEXORA_ESPORT_ACTIONS.append(action("create_role", name=f"{_type} {_game}"))
+_VEXORA_ESPORT_ACTIONS.append(action("create_role", name="Roster Clash of Clans"))
+PRESETS["vexora-esport"] = {
+    "label": "Vexora Esport — quatre jeux",
+    "description": (
+        "Ajoute les rôles, quatre pôles et salons d'actualité, roster, matchs, "
+        "stratégie, résultats et recrutement. Préserve VexoraKey ; "
+        "le panneau des tickets nécessite un paramétrage distinct."
+    ),
+    "actions": validate_actions(_VEXORA_ESPORT_ACTIONS),
+}
+
+
 def local_parse(prompt: str) -> list[dict[str, str]]:
     """Deterministic, intentionally narrow offline parser. No guessing."""
     results: list[dict[str, str]] = []
