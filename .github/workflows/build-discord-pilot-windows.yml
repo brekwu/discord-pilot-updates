@@ -414,7 +414,7 @@ jobs:
           }
           Compress-Archive -Path 'source-clean/discord-pilot' -DestinationPath 'DiscordPilot_Source.zip'
           $archive = (Resolve-Path 'DiscordPilot_Source.zip').Path
-          $notes = 'Discord Pilot 0.5.23 : micro de dictée local Whisper visible dès l’ouverture, avec cible automatique sur la demande principale et les champs de formulaire, sans exécution Discord automatique ; systemes interactifs complets de tickets et candidatures en langage naturel avec ressources explicites, publication de boutons existants, creation atomique de salons staff prives et verification des modifications via lecture Discord. Installation par MAJ, validation obligatoire.'
+          $notes = 'Discord Pilot 0.5.23 : micro local Whisper visible au demarrage, avec cible automatique sur la demande principale et les champs de formulaire, sans execution Discord automatique ; systemes interactifs complets de tickets et candidatures en langage naturel avec ressources explicites, publication de boutons existants, creation atomique de salons staff prives et verification des modifications via lecture Discord. Installation par MAJ, validation obligatoire.'
           $tag = 'v0.5.23'
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
