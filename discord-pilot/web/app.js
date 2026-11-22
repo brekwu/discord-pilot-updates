@@ -1027,12 +1027,20 @@ function renderPresets() {
   const nodes = [];
   for (const [i, t] of templates.entries()) {
     const b = dom("button", "preset-card");
+    const official = app.selected === "1509985472921735168" && t.id === "vexora-esport";
     b.append(dom("span", "preset-icon", icons[i] || "✦"),
-             dom("strong", "", t.label), dom("small", "", t.description));
-    b.onclick = () => preset(t.id);
+             dom("strong", "", t.label),
+             dom("small", "", official
+               ? "Déjà installé sur VexoraKey : 45 rôles, 11 catégories, 73 salons. N'ajoute rien : vérifie la structure existante."
+               : t.description));
+    b.onclick = () => official
+      ? toast("Structure officielle déjà installée : audite-la plutôt que de recréer des salons.", true)
+      : preset(t.id);
     nodes.push(b);
     if (t.id !== "vexora-esport") continue;
-    const auditButton = dom("button", "outline-button", "🔍 Auditer les 56 éléments sur Discord");
+    const auditButton = dom("button", "outline-button",
+      official ? "🔍 Auditer les 129 éléments VexoraKey existants"
+               : "🔍 Auditer les 56 éléments du modèle générique");
     const output = dom("div", "module-description");
     auditButton.onclick = async () => {
       if (!app.selected) return toast("Sélectionne le véritable serveur Vexora.", true);
