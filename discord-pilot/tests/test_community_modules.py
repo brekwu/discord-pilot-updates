@@ -71,6 +71,28 @@ class ModuleLogicTests(unittest.TestCase):
         self.assertEqual(app.native_module_plan("Active les statistiques des messages"),
                          [{"type": "set_module", "module": "activity_stats", "enabled": "true"}])
 
+    def test_optional_recruitment_game_settings_are_strict(self):
+        from recruitment_tickets import (
+            GAME_LABELS, enabled_games, normalize_recruitment_games, ticket_name)
+        self.assertEqual(len(GAME_LABELS), 4)
+        self.assertEqual(normalize_recruitment_games("Valorant, rocket-league"),
+                         "valorant, rocket-league")
+        self.assertEqual(normalize_recruitment_games(""), "")
+        guild = FakeGuild()
+        config = normalize_module("tickets", {
+            "enabled": True, "panel_channel_id": CID, "category_id": CATID,
+            "staff_role_id": "", "recruitment_games": "valorant, fortnite"
+        }, guild)
+        self.assertEqual(enabled_games(config), ["valorant", "fortnite"])
+        self.assertEqual(ticket_name(123456789012345678, "valorant"), "recrut-valorant-345678")
+        self.assertEqual(ticket_name(123456789012345678, "clash-of-clans"), "recrut-coc-345678")
+        self.assertEqual(ticket_name(123456789012345678), "ticket-345678")
+        for invalid in ("valorant, valorant", "valorant, unknown", "none", "valorant;fortnite",
+                        "valorant,,fortnite", "x" * 130):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                normalize_recruitment_games(invalid)
+        self.assertEqual(enabled_games({}), [])
+
     def test_every_module_opt_in_and_strict_config(self):
         guild = FakeGuild()
         self.assertEqual(len(MODULES), 17)
