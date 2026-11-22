@@ -81,9 +81,14 @@ class ModuleLogicTests(unittest.TestCase):
         guild = FakeGuild()
         config = normalize_module("tickets", {
             "enabled": True, "panel_channel_id": CID, "category_id": CATID,
-            "staff_role_id": "", "recruitment_games": "valorant, fortnite"
+            "staff_role_id": RID, "recruitment_games": "valorant, fortnite"
         }, guild)
         self.assertEqual(enabled_games(config), ["valorant", "fortnite"])
+        with self.assertRaisesRegex(ValueError, "rôle staff"):
+            normalize_module("tickets", {
+                "enabled": True, "panel_channel_id": CID, "category_id": CATID,
+                "staff_role_id": "", "recruitment_games": "valorant",
+            }, guild)
         self.assertEqual(ticket_name(123456789012345678, "valorant"), "recrut-valorant-345678")
         self.assertEqual(ticket_name(123456789012345678, "clash-of-clans"), "recrut-coc-345678")
         self.assertEqual(ticket_name(123456789012345678), "ticket-345678")
