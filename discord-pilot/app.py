@@ -38,6 +38,7 @@ from panel_actions import publish_panel
 from recruitment_tickets import GAME_LABELS, enabled_games, ticket_name
 from ticket_diagnostics import inspect_ticket_panel
 from vexora_esport_audit import audit_vexora_esport
+from vexora_official_layout import OFFICIAL_GUILD_ID
 from ticket_live_smoke import smoke_test_ticket
 from system_recipes import recipe_plan, recipe_kind, recipe_publication_authorized, uncovered_requirements
 from plan_verification import verify_plan
@@ -1376,7 +1377,7 @@ async def api_ticket_diagnostic(request):
 async def api_vexora_esport_audit(request):
     """Read real Discord roles/channels; do not change the selected guild."""
     guild_id = require_id(request.match_info["guild_id"])
-    report = await audit_vexora_esport(MANAGER.get_guild(guild_id))
+    report = await audit_vexora_esport(MANAGER.get_guild(guild_id), guild_id=guild_id)
     return web.json_response({"guild_id": guild_id, **report})
 
 
@@ -2027,6 +2028,12 @@ async def api_preset(request):
     preset_id = data.get("preset_id")
     if preset_id not in PRESETS:
         raise ValueError("Modèle inconnu.")
+    if guild_id == OFFICIAL_GUILD_ID and preset_id == "vexora-esport":
+        raise ValueError(
+            "Le serveur VexoraKey possède déjà sa structure Esport officielle : "
+            "32 rôles initiaux, 13 rôles complémentaires, 11 catégories et 73 salons. "
+            "Ce modèle générique créerait des doublons. Lance l'audit Discord "
+            "de la structure existante, pas une nouvelle création.")
     template = PRESETS[preset_id]
     plan = STATE.add(guild_id, f"Modèle : {template['label']}",
                      validate_actions(template["actions"]), f"preset:{preset_id}")
@@ -2123,6 +2130,13 @@ async def api_execute(request):
         raise web.HTTPNotFound(text="Plan introuvable.")
     if plan["status"] != "draft":
         raise ValueError("Ce plan est déjà lancé ou terminé. Pour réessayer, crée un nouveau plan.")
+    if str(plan["guild_id"]) == OFFICIAL_GUILD_ID and (
+            plan.get("mode") == "preset:vexora-esport"
+            or plan.get("actions") == PRESETS["vexora-esport"]["actions"]):
+        raise ValueError(
+            "Exécution bloquée : le serveur officiel VexoraKey possède déjà "
+            "sa structure Esport. Ce plan créerait des doublons. "
+            "Utilise d'abord l'audit réel des 129 éléments.")
     guild = MANAGER.get_guild(plan["guild_id"])
     if guild is None and any(item["type"] != "suggest_integration" for item in plan["actions"]):
         raise ValueError("Bot déconnecté ou absent du serveur. Aucune action envoyée.")
