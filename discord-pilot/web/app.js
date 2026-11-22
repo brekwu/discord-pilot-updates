@@ -8,7 +8,7 @@ const actionNames = { create_category: "Créer une catégorie", create_text_chan
 const icons = ["⌂", "♧", "♜", "▤"];
 let serverWasUnavailable = false;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-const voice = { stream: null, recorder: null, chunks: [], timer: null, clock: null, startedAt: 0, previewUrl: null, busy: false };
+const voice = { stream: null, recorder: null, chunks: [], timer: null, clock: null, startedAt: 0, previewUrl: null, busy: false, target: null, field: null };
 
 function dom(tag, className, value) { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = String(value); return node; }
 function replace(node, children) { node.replaceChildren(...children); }
@@ -54,6 +54,57 @@ function voiceStatus(message) {
   const el = $("voiceStatus");
   el.hidden = false;
   el.textContent = message;
+  const floatingStatus = $("universalVoiceStatus");
+  if (floatingStatus) floatingStatus.textContent = message;
+}
+
+/** Dictée dans les entrées métier sans toucher aux mots de passe ni aux chiffres. */
+function canDictateTo(field) {
+  if (!field || !field.matches || !field.matches(
+    'textarea,input[type="text"],input[type="search"],input[type="email"],input[type="url"],input[type="tel"]'
+  )) return false;
+  return !field.disabled && !field.readOnly && field.id !== "requestText";
+}
+
+function activeVoiceTarget(field) {
+  return field && field.isConnected !== false &&
+    !(field.closest?.("#modalBackdrop")?.hidden);
+}
+
+function appendVoiceTranscript(field, transcript) {
+  if (!field || field.disabled || field.readOnly || !activeVoiceTarget(field)) return false;
+  const candidate = [String(field.value || "").trim(), String(transcript || "").trim()].filter(Boolean).join(" ");
+  const limitAttr = typeof field.getAttribute === "function" ? field.getAttribute("maxlength") : null;
+  const explicitLimit = limitAttr !== null && limitAttr !== undefined ? Number(limitAttr)
+    : typeof field.maxLength === "number" && field.maxLength > 0 ? field.maxLength : -1;
+  if (explicitLimit >= 0 && candidate.length > explicitLimit) return false;
+  field.value = candidate;
+  field.dispatchEvent(new Event("input", {bubbles: true}));
+  return true;
+}
+
+function updateUniversalVoiceButton() {
+  const button = $("universalVoiceButton");
+  if (!button) return;
+  const active = voice.stream ? voice.target : voice.field;
+  button.hidden = !active || active.id === "requestText" || !activeVoiceTarget(active);
+  button.disabled = Boolean(voice.busy);
+  button.textContent = voice.stream ? "■ Arrêter la dictée" : "🎙 Dicter ici";
+  button.setAttribute("aria-label", voice.stream ? "Arrêter la dictée vocale" : "Dicter dans le champ sélectionné");
+}
+
+function initializeUniversalVoice() {
+  document.addEventListener("focusin", event => {
+    const field = event.target;
+    if (canDictateTo(field)) voice.field = field;
+    else if (field?.id === "requestText") voice.field = null;
+    if (!voice.stream) updateUniversalVoiceButton();
+  }, true);
+  const button = $("universalVoiceButton");
+  if (!button) return;
+  button.addEventListener("pointerdown", event => event.preventDefault());
+  button.onclick = () => toggleVoiceRecording(voice.field);
+  updateUniversalVoiceButton();
 }
 
 function buildVoiceBlob(chunks, mimeType) {
@@ -123,6 +174,7 @@ async function beginVoiceRecording() {
     recorder.ondataavailable = event => {if (event.data?.size) voice.chunks.push(event.data);};
     recorder.start(1000); // The stop event flushes all remaining data, not just the first second.
     voice.stream = stream; voice.recorder = recorder; voice.startedAt = Date.now();
+    updateUniversalVoiceButton();
     voice.timer = setTimeout(() => finishVoiceRecording(), 300000);
     voice.clock = setInterval(() => {
       const seconds = Math.floor((Date.now() - voice.startedAt) / 1000);
@@ -130,6 +182,7 @@ async function beginVoiceRecording() {
     }, 1000);
     $("voiceButton").classList.add("recording");
     $("voiceButton").textContent = "■ Arrêter";
+    updateUniversalVoiceButton();
     voiceStatus("● Enregistrement démarré. Parle normalement, même dans une autre fenêtre. Clique sur Arrêter pour transcrire (5 minutes maximum).");
   } catch (error) {
     stream.getTracks().forEach(track => track.stop());
@@ -179,10 +232,11 @@ async function finishVoiceRecording() {
     voiceStatus(`${wav.seconds.toFixed(1)} s de son complet reçu. Transcription Whisper Small en cours… Au premier usage, téléchargement automatique d'environ 500 Mo.`);
     const result = await request("/api/transcribe", {method: "POST", headers: {"Content-Type": "audio/wav"}, body: wav.blob});
     if (!result.text?.trim()) throw new Error("Aucune parole détectée. Essaie de parler plus près du micro.");
-    const input = $("requestText");
-    const joined = [input.value.trim(), result.text.trim()].filter(Boolean).join(" ");
-    input.value = joined.slice(0, input.maxLength);
-    input.dispatchEvent(new Event("input", {bubbles: true}));
+    const input = voice.target || $("requestText");
+    if (!appendVoiceTranscript(input, result.text)) {
+      voiceStatus("Transcription reçue mais champ fermé ou limite atteinte. Texte : " + result.text.trim());
+      throw new Error("Le champ sélectionné n'accepte plus la dictée : texte disponible dans l'état vocal pour copie.");
+    }
     if (elapsed > 10 && result.seconds < elapsed * 0.65) {
       voiceStatus(`⚠ Dictée partielle : le fichier ne contient que ${result.seconds} s sur ${elapsed.toFixed(0)} s enregistrées. Réécoute l'audio ci-dessous pour vérifier ton microphone.`);
     } else {
@@ -191,16 +245,26 @@ async function finishVoiceRecording() {
   } catch (error) {
     voiceStatus("Transcription interrompue : " + error.message);
     toast(error.message, true);
-  } finally { voice.busy = false; button.disabled = false; }
+  } finally {
+    voice.busy = false; button.disabled = false; voice.target = null;
+    updateUniversalVoiceButton();
+  }
 }
 
-async function toggleVoiceRecording() {
+async function toggleVoiceRecording(field = $("requestText")) {
   if (voice.busy) return;
   if (voice.stream) return finishVoiceRecording();
+  if (!activeVoiceTarget(field) || field.disabled || field.readOnly) {
+    return toast("Sélectionne un champ de texte avant la dictée.", true);
+  }
+  voice.target = field;
   const button = $("voiceButton"); button.disabled = true;
   try { await beginVoiceRecording(); }
-  catch (error) { voiceStatus("Impossible de démarrer le micro : " + error.message); toast(error.message, true); }
-  finally { button.disabled = false; }
+  catch (error) {
+    voice.target = null;
+    voiceStatus("Impossible de démarrer le micro : " + error.message);
+    toast(error.message, true);
+  } finally { button.disabled = false; updateUniversalVoiceButton(); }
 }
 
 function modal({title, description, fields = [], confirmText = "Confirmer", onConfirm}) {
@@ -1093,7 +1157,8 @@ async function init() {
   $("generateButton").onclick = createPlan;
   $("requestText").addEventListener("input", updateRequestLength);
   $("testDiscordButton").onclick = testDiscord;
-  $("voiceButton").onclick = toggleVoiceRecording;
+  $("voiceButton").onclick = () => toggleVoiceRecording($("requestText"));
+  initializeUniversalVoice();
   $("executeButton").onclick = executePlan;
   $("modeSelect").onchange = () => $("modelSelect").hidden = !app.models.length || $("modeSelect").value === "local";
   $("inviteButton").onclick = async () => { try { const data = await request("/api/invite"); window.open(data.url, "_blank", "noopener,noreferrer"); } catch (e) { toast(e.message, true); } };
