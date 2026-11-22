@@ -580,7 +580,7 @@ function renderModules() {
         input = dom("input", "module-input");
         input.type = kind === "positive_int" ? "number" : "text";
         if (kind === "positive_int") { input.min = "1"; input.max = "1000"; input.step = "1"; }
-        input.placeholder = ({words: "mot, expression, autre mot", hour: "08:30", snowflake: "123456789012345678", emoji: "✅", message: "Ton annonce…", positive_int: "10"})[kind] || "";
+        input.placeholder = ({words: "mot, expression, autre mot", hour: "08:30", snowflake: "123456789012345678", emoji: "✅", message: "Ton annonce…", positive_int: "10", games: "rocket-league, valorant, fortnite, clash-of-clans"})[kind] || "";
         input.maxLength = kind === "message" ? 1800 : kind === "words" ? 1400 : 100;
       }
       input.value = current[name] || ""; inputs[name] = input;
