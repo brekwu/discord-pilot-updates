@@ -992,7 +992,45 @@ async function preset(id) {
 
 function renderPresets() {
   const templates = app.bootstrap?.presets || [];
-  replace($("presetCards"), templates.map((t, i) => { const b = dom("button", "preset-card"); b.append(dom("span", "preset-icon", icons[i] || "✦"), dom("strong", "", t.label), dom("small", "", t.description)); b.onclick = () => preset(t.id); return b; }));
+  const nodes = [];
+  for (const [i, t] of templates.entries()) {
+    const b = dom("button", "preset-card");
+    b.append(dom("span", "preset-icon", icons[i] || "✦"),
+             dom("strong", "", t.label), dom("small", "", t.description));
+    b.onclick = () => preset(t.id);
+    nodes.push(b);
+    if (t.id !== "vexora-esport") continue;
+    const auditButton = dom("button", "outline-button", "🔍 Auditer les 56 éléments sur Discord");
+    const output = dom("div", "module-description");
+    auditButton.onclick = async () => {
+      if (!app.selected) return toast("Sélectionne le véritable serveur Vexora.", true);
+      const guildId = app.selected;
+      auditButton.disabled = true;
+      replace(output, [dom("p", "", "Lecture des salons et rôles Discord…")]);
+      try {
+        const result = await request(`/api/audit/${guildId}/vexora-esport`);
+        if (app.selected !== guildId) {
+          replace(output, [dom("p", "", "Le serveur a changé : recommence le contrôle.")]);
+          return;
+        }
+        replace(output, [
+          dom("strong", "", `${result.passed}/${result.expected} éléments vérifiés — ${result.status}`),
+          dom("p", "", result.detail),
+          ...(result.checks || []).filter(c => !c.ok).map(c =>
+            dom("p", "", `✗ ${c.name} : ${c.detail}`)),
+          dom("p", "", "Lecture seule ; les tickets et les permissions sont vérifiés séparément."),
+        ]);
+      } catch (e) {
+        replace(output, [dom("p", "", `Audit impossible : ${e.message}`)]);
+      } finally {
+        auditButton.disabled = false;
+      }
+    };
+    const auditCard = dom("div", "module-description");
+    auditCard.append(auditButton, output);
+    nodes.push(auditCard);
+  }
+  replace($("presetCards"), nodes);
 }
 
 function executePlan() {
