@@ -6,21 +6,27 @@ Uses Discord REST reads; creates/modifies/deletes nothing.
 from __future__ import annotations
 
 from planner import PRESETS, norm
+from vexora_official_layout import OFFICIAL_GUILD_ID
+from vexora_official_audit import audit_official_vexora
 
 
-async def audit_vexora_esport(guild) -> dict:
+async def audit_vexora_esport(guild, guild_id: str | None = None) -> dict:
     target = PRESETS["vexora-esport"]["actions"]
+    official = str(getattr(guild, "id", guild_id)) == OFFICIAL_GUILD_ID
+    total = 129 if official else len(target)
     if guild is None:
-        return {"status": "offline", "checked": 0, "expected": len(target),
-                "passed": 0, "missing": len(target), "checks": [],
+        return {"status": "offline", "checked": 0, "expected": total,
+                "passed": 0, "missing": total, "checks": [],
                 "detail": "Bot Discord déconnecté du serveur sélectionné."}
     try:
         channels = await guild.fetch_channels()
         roles = await guild.fetch_roles()
     except Exception as exc:
-        return {"status": "unverified", "checked": 0, "expected": len(target),
-                "passed": 0, "missing": len(target), "checks": [],
+        return {"status": "unverified", "checked": 0, "expected": total,
+                "passed": 0, "missing": total, "checks": [],
                 "detail": f"Lecture directe Discord indisponible ({type(exc).__name__})."}
+    if official:
+        return audit_official_vexora(guild, channels, roles)
     checks = []
     categories = [c for c in channels if str(getattr(c, "type", "")) == "category"]
     text_channels = [c for c in channels if str(getattr(c, "type", "")) == "text"]
