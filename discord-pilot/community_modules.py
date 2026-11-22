@@ -133,6 +133,8 @@ def normalize_module(name: str, data: dict, guild) -> dict:
             if not value or len(value) > 1800:
                 raise ValueError("Message requis (1 à 1 800 caractères).")
             result[key] = value
+    if name == "tickets" and result["enabled"] and result.get("recruitment_games") and not result.get("staff_role_id"):
+        raise ValueError("Pour le recrutement esport, configure d'abord un rôle staff accessible aux tickets.")
     return result
 
 
