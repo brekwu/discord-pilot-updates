@@ -35,6 +35,7 @@ from conversational_workflows import (batch_module_plan, guided_workflow_plan,
                                       server_preset_plan)
 from integration_catalog import PROVIDERS, catalog, recommended_providers
 from panel_actions import publish_panel
+from recruitment_tickets import GAME_LABELS, enabled_games, ticket_name
 from system_recipes import recipe_plan, recipe_kind, recipe_publication_authorized, uncovered_requirements
 from plan_verification import verify_plan
 from panel_planning import (complete_panel_plan, direct_panel_plan,
@@ -284,12 +285,16 @@ class PilotBot(discord.Client):
         if not isinstance(custom, str):
             return
         gid = str(interaction.guild.id)
-        if re.fullmatch(r"pilot:ticket:(?:open|close):\d{17,20}(?::\d{17,20})?", custom):
+        if re.fullmatch(
+            r"pilot:ticket:(?:open|close):\d{17,20}"
+            r"(?::(?:\d{17,20}|rocket-league|valorant|fortnite|clash-of-clans))?",
+            custom,
+        ):
             _, _, mode, guild_id, *args = custom.split(":")
             if guild_id != gid:
                 return
-            if mode == "open" and not args:
-                await self.open_ticket(interaction)
+            if mode == "open" and len(args) <= 1:
+                await self.open_ticket(interaction, args[0] if args else "")
             elif mode == "close" and len(args) == 1 and args[0] == str(interaction.channel_id):
                 await self.close_ticket(interaction)
             return
@@ -327,21 +332,26 @@ class PilotBot(discord.Client):
             STATE.save()
         await interaction.response.send_message("✅ Réponse enregistrée. Le résultat sera dévoilé à la fin.", ephemeral=True)
 
-    async def open_ticket(self, interaction):
+    async def open_ticket(self, interaction, game: str = ""):
         guild = interaction.guild
         gid = str(guild.id)
         cfg = STATE.module(gid, "tickets")
         if not cfg.get("enabled"):
             await interaction.response.send_message("Les tickets sont désactivés sur ce serveur.", ephemeral=True)
             return
+        if game and (game not in GAME_LABELS or game not in enabled_games(cfg)):
+            await interaction.response.send_message(
+                "Ce pôle de recrutement n'est pas activé par le staff.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.ticket_locks.setdefault(guild.id, asyncio.Lock()):
             tickets = STATE.state["tickets"].setdefault(gid, {})
             existing = next((cid for cid, row in tickets.items()
                              if row.get("owner_id") == str(interaction.user.id) and row.get("status") == "open"
+                             and row.get("game", "") == game
                              and guild.get_channel(int(cid)) is not None), None)
             if existing:
-                await interaction.followup.send(f"Tu as déjà un ticket : <#{existing}>.", ephemeral=True)
+                await interaction.followup.send(f"Tu as déjà un ticket pour ce pôle : <#{existing}>.", ephemeral=True)
                 return
             category = guild.get_channel(int(cfg["category_id"]))
             if not isinstance(category, discord.CategoryChannel):
@@ -357,22 +367,33 @@ class PilotBot(discord.Client):
                                                                     manage_channels=True, read_message_history=True)
             if cfg.get("staff_role_id"):
                 role = guild.get_role(int(cfg["staff_role_id"]))
-                if role:
-                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
-                                                                    read_message_history=True)
+                if not role:
+                    await interaction.followup.send(
+                        "Le rôle du support configuré n'existe plus. Corrige la configuration avant d'ouvrir un ticket.",
+                        ephemeral=True)
+                    return
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
+                                                                read_message_history=True)
             try:
                 channel = await guild.create_text_channel(
-                    f"ticket-{str(interaction.user.id)[-6:]}", category=category,
-                    topic=f"Ticket créé par {interaction.user.id}", overwrites=overwrites,
+                    ticket_name(interaction.user.id, game), category=category,
+                    topic=(f"Ticket recrutement {GAME_LABELS[game]} | utilisateur {interaction.user.id}"
+                           if game else f"Ticket créé par {interaction.user.id}"),
+                    overwrites=overwrites,
                     reason="Discord Pilot : ticket ouvert")
                 tickets[str(channel.id)] = {"owner_id": str(interaction.user.id),
-                                            "status": "open", "created_at": utc_timestamp()}
+                                            "game": game, "status": "open",
+                                            "created_at": utc_timestamp()}
                 STATE.save()
                 view = discord.ui.View(timeout=None)
                 view.add_item(discord.ui.Button(label="Fermer et archiver ce ticket", style=discord.ButtonStyle.secondary,
                                                 custom_id=f"pilot:ticket:close:{gid}:{channel.id}", emoji="🔒"))
-                await channel.send(f"🎟️ Ticket ouvert par {interaction.user.mention}. Explique ta demande ici.",
-                                   view=view, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+                title = f"Recrutement {GAME_LABELS[game]}" if game else "Support"
+                await channel.send(
+                    f"🎟️ **{title}** · Ticket privé de {interaction.user.mention}. "
+                    "Décris ta demande, ton rôle et tes disponibilités.",
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
                 await interaction.followup.send(f"Ton ticket privé est prêt : {channel.mention}", ephemeral=True)
             except (discord.Forbidden, discord.HTTPException):
                 await interaction.followup.send("Ouverture impossible : autorisations du bot insuffisantes.", ephemeral=True)
