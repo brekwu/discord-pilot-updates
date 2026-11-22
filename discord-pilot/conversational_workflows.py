@@ -153,6 +153,15 @@ def guided_workflow_plan(prompt: str) -> list[dict]:
 def server_preset_plan(prompt: str) -> list[dict]:
     """Allow choosing existing audited templates by natural-language request."""
     phrase = norm(prompt).strip(" .!?")
+    # Named Vexora Esport means the four-game organization, never generic tournoi.
+    if re.fullmatch(
+        r"(?:cree|creer|prepare|preparer|configure|configurer|mets en place|installer?|"
+        r"initialise|initialiser)\s+(?:un|une|le|la)?\s*"
+        r"(?:serveur|structure|modele)\s+(?:de\s+|pour\s+)?"
+        r"vexora[-\s]+(?:e[-\s]*)?sports?",
+        phrase,
+    ):
+        return validate_actions(PRESETS["vexora-esport"]["actions"])
     match = re.fullmatch(
         r"(?:cree|creer|prepare|preparer|configure|configurer|mets en place|installer?|initialise|initialiser)\s+"
         r"(?:un|une|le|la)?\s*(?:serveur|structure|modele)\s+"
