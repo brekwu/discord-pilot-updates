@@ -236,8 +236,10 @@ async function finishVoiceRecording() {
     if (!result.text?.trim()) throw new Error("Aucune parole détectée. Essaie de parler plus près du micro.");
     const input = voice.target || $("requestText");
     if (!appendVoiceTranscript(input, result.text)) {
-      voiceStatus("Transcription reçue mais champ fermé ou limite atteinte. Texte : " + result.text.trim());
-      throw new Error("Le champ sélectionné n'accepte plus la dictée : texte disponible dans l'état vocal pour copie.");
+      // Do not lose a completed transcript if the input was removed or filled meanwhile.
+      voiceStatus("Texte transcrit (champ fermé ou limite atteinte) : " + result.text.trim());
+      toast("La dictée n'a pas été insérée. Le texte reste visible et copiable dans l'état vocal.", true);
+      return;
     }
     if (elapsed > 10 && result.seconds < elapsed * 0.65) {
       voiceStatus(`⚠ Dictée partielle : le fichier ne contient que ${result.seconds} s sur ${elapsed.toFixed(0)} s enregistrées. Réécoute l'audio ci-dessous pour vérifier ton microphone.`);
