@@ -607,6 +607,28 @@ function renderModules() {
       panel.disabled = !data.online || !current.enabled;
       panel.onclick = publishTicketPanel;
       article.append(panel);
+
+      const diagnostic = dom("button", "outline-button", "🔍 Vérifier les tickets sur Discord");
+      const output = dom("div", "module-description");
+      diagnostic.onclick = async () => {
+        if (!app.selected) return;
+        diagnostic.disabled = true;
+        replace(output, [dom("p", "", "Lecture du serveur Discord en cours…")]);
+        try {
+          const report = await request(`/api/interactive/${app.selected}/tickets/diagnostic`);
+          const header = report.status === "ready_for_manual_test"
+            ? "✓ Préparation vérifiée sur Discord. Teste encore une ouverture et une fermeture réelles."
+            : "⚠ Certains contrôles échouent. Aucun changement effectué.";
+          replace(output, [
+            dom("strong", "", header),
+            ...report.checks.map(c => dom("p", "", `${c.ok ? "✓" : "✗"} ${c.detail}`)),
+            dom("p", "", "Ce contrôle est uniquement en lecture : il ne simule pas le clic d'un candidat."),
+          ]);
+        } catch (e) {
+          replace(output, [dom("p", "", `Diagnostic indisponible : ${e.message}`)]);
+        } finally { diagnostic.disabled = false; }
+      };
+      article.append(diagnostic, output);
     }
     if (spec.id === "applications") {
       const panel = dom("button", "outline-button", "📝 Publier le formulaire de candidature");
