@@ -213,11 +213,13 @@ class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_esport_recruitment_opens_isolated_private_tickets_per_game(self):
         app.STATE.set_module(GID, "tickets", {
             "enabled": True, "panel_channel_id": TEXT, "category_id": CATEGORY,
-            "staff_role_id": "", "recruitment_games": "valorant, fortnite",
+            "staff_role_id": "723456789012345678", "recruitment_games": "valorant, fortnite",
         })
         created = {}
         next_id = 623456789012345678
         self.guild.created_names = []
+        staff_role = FakeMember("723456789012345678")
+        self.guild.get_role = lambda ident: staff_role if ident == staff_role.id else None
 
         async def create_channel(name, **kwargs):
             nonlocal next_id
@@ -240,6 +242,7 @@ class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_record["game"], "valorant")
         self.assertFalse(self.guild.last_overwrites[self.guild.default_role].view_channel)
         self.assertTrue(self.guild.last_overwrites[self.guild.opener].view_channel)
+        self.assertTrue(self.guild.last_overwrites[staff_role].view_channel)
 
         # Same owner/game never produces a duplicate.
         await self.bot.on_interaction(valorant)
