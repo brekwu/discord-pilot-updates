@@ -27,7 +27,7 @@ class PanelText(FakeChannel):
 
     async def send(self, content, **kwargs):
         self.sent.append((content, kwargs))
-        self.last_message = SimpleNamespace(id=713456789012345678 + len(self.sent))
+        self.last_message = SimpleNamespace(id=713456789012345678 + len(self.sent), edit=AsyncMock())
         self.deleted = False
         return self.last_message
 
@@ -106,6 +106,41 @@ class PanelRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(renewed, "done")
                 self.assertNotEqual(updated["message_id"], record["message_id"])
                 self.assertEqual(len(guild.channel.sent), 2)
+
+    async def test_recruitment_buttons_update_existing_panel_without_new_public_messages(self):
+        guild = FakeGuild()
+        guild.channel = PanelText("tickets")
+        guild.channels[0] = guild.channel
+        with tempfile.TemporaryDirectory() as tmp:
+            state = State(Path(tmp))
+            base = {"enabled": True, "panel_channel_id": str(CID),
+                    "category_id": str(CATID), "staff_role_id": str(RID)}
+            state.set_module(str(GID), "tickets", base)
+            with patch.object(discord_ops.discord, "TextChannel", PanelText):
+                first, _, old = await publish_panel(guild, state, "tickets")
+                self.assertEqual(first, "done")
+                self.assertEqual(len(guild.channel.sent), 1)
+                self.assertEqual(len(guild.channel.sent[0][1]["view"].children), 1)
+                state.set_module(str(GID), "tickets",
+                                 {**base, "recruitment_games": "valorant, rocket-league, fortnite, clash-of-clans"})
+                status, _, updated = await publish_panel(guild, state, "tickets")
+                self.assertEqual(status, "done")
+                self.assertEqual(updated["message_id"], old["message_id"])
+                self.assertEqual(len(guild.channel.sent), 1)
+                edit_kwargs = guild.channel.last_message.edit.call_args.kwargs
+                buttons = edit_kwargs["view"].children
+                self.assertEqual(len(buttons), 5)
+                self.assertEqual([b.label for b in buttons][1:],
+                                 ["Valorant", "Rocket League", "Fortnite", "Clash of Clans"])
+                self.assertEqual(buttons[1].custom_id,
+                                 f"pilot:ticket:open:{GID}:valorant")
+                again, _, _ = await publish_panel(guild, state, "tickets")
+                self.assertEqual(again, "skipped")
+                self.assertEqual(guild.channel.last_message.edit.await_count, 1)
+                state.set_module(str(GID), "tickets", base)
+                disabled, _, _ = await publish_panel(guild, state, "tickets")
+                self.assertEqual(disabled, "done")
+                self.assertEqual(len(guild.channel.last_message.edit.call_args.kwargs["view"].children), 1)
 
     async def test_application_panel_requires_private_review_channel(self):
         guild = FakeGuild()

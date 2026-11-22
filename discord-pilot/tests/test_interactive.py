@@ -210,6 +210,72 @@ class InteractionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.guild.created.edit.await_count, 1)
         self.assertEqual(len(app.STATE.state["tickets"][GID]), 1)
 
+    async def test_esport_recruitment_opens_isolated_private_tickets_per_game(self):
+        app.STATE.set_module(GID, "tickets", {
+            "enabled": True, "panel_channel_id": TEXT, "category_id": CATEGORY,
+            "staff_role_id": "723456789012345678", "recruitment_games": "valorant, fortnite",
+        })
+        created = {}
+        next_id = 623456789012345678
+        self.guild.created_names = []
+        staff_role = FakeMember("723456789012345678")
+        self.guild.get_role = lambda ident: staff_role if ident == staff_role.id else None
+
+        async def create_channel(name, **kwargs):
+            nonlocal next_id
+            next_id += 1
+            channel = FakeText(str(next_id))
+            created[channel.id] = channel
+            self.guild.created_names.append(name)
+            self.guild.last_overwrites = kwargs["overwrites"]
+            return channel
+
+        previous_get = self.guild.get_channel
+        self.guild.get_channel = lambda ident: created.get(ident) or previous_get(ident)
+        self.guild.create_text_channel = create_channel
+        valorant = self.interaction("open")
+        valorant.data["custom_id"] = f"pilot:ticket:open:{GID}:valorant"
+        await self.bot.on_interaction(valorant)
+        self.assertEqual(self.guild.created_names, ["recrut-valorant-345678"])
+        first = next(iter(created.values()))
+        first_record = app.STATE.state["tickets"][GID][str(first.id)]
+        self.assertEqual(first_record["game"], "valorant")
+        self.assertFalse(self.guild.last_overwrites[self.guild.default_role].view_channel)
+        self.assertTrue(self.guild.last_overwrites[self.guild.opener].view_channel)
+        self.assertTrue(self.guild.last_overwrites[staff_role].view_channel)
+
+        # Same owner/game never produces a duplicate.
+        await self.bot.on_interaction(valorant)
+        self.assertEqual(len(created), 1)
+
+        fortnite = self.interaction("open")
+        fortnite.data["custom_id"] = f"pilot:ticket:open:{GID}:fortnite"
+        await self.bot.on_interaction(fortnite)
+        self.assertEqual(len(created), 2)
+        self.assertEqual(self.guild.created_names[-1], "recrut-fortnite-345678")
+        self.assertEqual(
+            set(row["game"] for row in app.STATE.state["tickets"][GID].values()),
+            {"valorant", "fortnite"},
+        )
+
+        blocked = self.interaction("open")
+        blocked.data["custom_id"] = f"pilot:ticket:open:{GID}:rocket-league"
+        await self.bot.on_interaction(blocked)
+        self.assertEqual(len(created), 2)
+        blocked.response.send_message.assert_awaited_once()
+
+    async def test_missing_configured_staff_role_blocks_ticket_before_channel_creation(self):
+        app.STATE.set_module(GID, "tickets", {
+            "enabled": True, "panel_channel_id": TEXT, "category_id": CATEGORY,
+            "staff_role_id": "723456789012345678",
+        })
+        interaction = self.interaction("open")
+        self.guild.create_text_channel = AsyncMock()
+        await self.bot.on_interaction(interaction)
+        self.guild.create_text_channel.assert_not_awaited()
+        interaction.followup.send.assert_awaited_once()
+        self.assertIn("n'existe plus", interaction.followup.send.call_args.args[0])
+
     async def test_only_owner_or_staff_can_close(self):
         app.STATE.state["tickets"].setdefault(GID, {})[str(self.guild.created.id)] = {
             "owner_id": OWNER, "status": "open"}

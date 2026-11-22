@@ -12,6 +12,7 @@ import discord
 
 from community_modules import normalize_module
 from plan_runtime import PlanGuildView
+from recruitment_tickets import GAME_LABELS, enabled_games
 
 
 PANEL_SPECS = {
@@ -74,26 +75,56 @@ async def _publish_panel_once(guild, state, module: str, created: dict | None) -
             if not isinstance(previous_channel, discord.TextChannel):
                 raise ValueError("Ancien salon du panneau inaccessible : vérifie sa suppression avant de republier.")
             try:
-                await previous_channel.fetch_message(int(former_message_id))
+                former_message = await previous_channel.fetch_message(int(former_message_id))
             except discord.NotFound:
                 pass  # A genuinely deleted message can be recreated.
             except (discord.Forbidden, discord.HTTPException):
                 raise ValueError("Impossible de vérifier le précédent panneau. Aucune publication en double.")
             else:
                 if former_channel_id == str(channel.id):
+                    if module == "tickets" and previous.get("games", []) != enabled_games(cfg):
+                        # Updating our own panel preserves the original message and ID.
+                        await former_message.edit(
+                            content=panel_message(module, cfg),
+                            view=make_panel_view(module, gid, cfg),
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                        previous["games"] = enabled_games(cfg)
+                        state.save()
+                        return "done", "Boutons de recrutement actualisés sur le panneau existant.", previous
                     return "skipped", "Panneau déjà publié et vérifié dans ce salon.", previous
                 raise ValueError("Un panneau existe dans un autre salon : supprime-le d'abord ou conserve son emplacement.")
         else:
             raise ValueError("L'ancien panneau a des identifiants incomplets : vérifie-le manuellement.")
-    button_view = discord.ui.View(timeout=None)
-    button_view.add_item(discord.ui.Button(
-        label=spec["label"], style=spec["button_style"],
-        custom_id=f"{spec['custom_prefix']}:{gid}", emoji=spec["emoji"]))
-    message = await channel.send(spec["message"], view=button_view,
+    button_view = make_panel_view(module, gid, cfg)
+    message = await channel.send(panel_message(module, cfg), view=button_view,
                                  allowed_mentions=discord.AllowedMentions.none())
     saved = {"channel_id": str(channel.id), "message_id": str(message.id)}
+    if module == "tickets":
+        saved["games"] = enabled_games(cfg)
     records[gid] = saved
     state.save()
     if records.get(gid) != saved:
         raise ValueError("La référence du panneau n'a pas été conservée.")
     return "done", "Panneau interactif publié, ID du message enregistré.", saved
+
+def panel_message(module: str, cfg: dict) -> str:
+    if module == "tickets" and enabled_games(cfg):
+        return ("🎟️ **Support et recrutement esport** — choisis le jeu pour ouvrir un "
+                "salon privé visible uniquement par toi, le support et le bot.")
+    return PANEL_SPECS[module]["message"]
+
+
+def make_panel_view(module: str, guild_id: str, cfg: dict) -> discord.ui.View:
+    spec = PANEL_SPECS[module]
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(
+        label=spec["label"], style=spec["button_style"],
+        custom_id=f"{spec['custom_prefix']}:{guild_id}", emoji=spec["emoji"]))
+    if module == "tickets":
+        for game in enabled_games(cfg):
+            view.add_item(discord.ui.Button(
+                label=GAME_LABELS[game], style=discord.ButtonStyle.secondary,
+                custom_id=f"pilot:ticket:open:{guild_id}:{game}",
+            ))
+    return view
