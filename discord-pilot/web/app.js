@@ -60,10 +60,10 @@ function voiceStatus(message) {
 
 /** Dictée dans les entrées métier sans toucher aux mots de passe ni aux chiffres. */
 function canDictateTo(field) {
-  if (!field || !field.matches || !field.matches(
-    'textarea,input[type="text"],input[type="search"],input[type="email"],input[type="url"],input[type="tel"]'
-  )) return false;
-  return !field.disabled && !field.readOnly && field.id !== "requestText";
+  if (!field) return false;
+  const editable = field.tagName === "TEXTAREA" ||
+    (field.tagName === "INPUT" && ["text", "search", "email", "url", "tel"].includes(field.type));
+  return editable && !field.disabled && !field.readOnly && field.id !== "requestText";
 }
 
 function activeVoiceTarget(field) {
