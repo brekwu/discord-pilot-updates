@@ -343,6 +343,10 @@ class PilotBot(discord.Client):
             await interaction.response.send_message(
                 "Ce pôle de recrutement n'est pas activé par le staff.", ephemeral=True)
             return
+        if game and not cfg.get("staff_role_id"):
+            await interaction.response.send_message(
+                "Le recrutement exige un rôle staff configuré pour voir les tickets.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.ticket_locks.setdefault(guild.id, asyncio.Lock()):
             tickets = STATE.state["tickets"].setdefault(gid, {})
